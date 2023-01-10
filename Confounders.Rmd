@@ -1,0 +1,167 @@
+---
+title: "Confounders"
+author: "Jesse Cohen"
+date: '2022-12-14'
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(here)
+library(ggpubr)
+
+ashs_wide <- readRDS(here("ashs_wide.RDS"))
+clinical_clean <- readRDS(here("clinical_clean.RDS"))
+mri_bids <- readRDS(here("mri_bids_data_t1.RDS"))
+```
+```{r mri_bids collapse factors, dev='png'}
+
+mri_bids$DicomInstitutionName <- fct_lump_min(mri_bids$DicomInstitutionName, min = 30)
+
+volumes_all %>% 
+ keep(is.numeric) %>% 
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +  
+  theme(axis.text.x = element_text(size = 4)) +
+  facet_wrap(~ key, scales = "free") +   # In separate panels
+    geom_histogram(bins = 13) +
+  theme(strip.text.x = element_text(size = 6))
+
+x <- volumes_all[volumes_all$diagnosis=="Normal",] %>% 
+  keep(is.numeric) %>% cor(use="na.or.complete")
+
+
+
+
+ashs_bids %>% 
+ keep(is.numeric) %>% 
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +  
+  theme(axis.text.x = element_text(size = 4)) +
+  facet_wrap(~ key, scales = "free") +   # In separate panels
+    geom_histogram(bins = 13) +
+  theme(strip.text.x = element_text(size = 6))
+
+```
+
+
+```{r}
+ggplot(data = ashs_bids, aes(x= left_Anterior_hippocampus, fill = diagnosis=="Normal")) +
+  geom_histogram()
+
+ashs_bids %>% filter(left_Anterior_hippocampus >1600 & left_Anterior_hippocampus<1800) %>% 
+  ggplot(data = ., aes(x= left_Anterior_hippocampus, fill = diagnosis=="Normal")) +
+  geom_histogram()
+
+ashs_bids %>% filter(left_Anterior_hippocampus >2200) %>% View()
+ggplot(data = ., aes(x= left_Anterior_hippocampus, fill = diagnosis=="Normal")) +
+  geom_histogram()
+```
+# Next to do:
+1. QC on the images corresponding to the above outliers 
+2. get rid of YOB>1980 
+
+```{r import data, include=FALSE}
+ashs_bids <- ashs_wide %>% 
+  left_join(mri_bids) %>% 
+  left_join(clinical_clean) %>% 
+  distinct()
+  
+
+x <- ashs_bids[ashs_bids$diagnosis=="Normal",] %>% 
+  keep(is.numeric) %>% cor(use="na.or.complete")
+
+heatmaply_cor(x,
+              xlab = "Features",
+              ylab = "Features",
+              k_col = 5,
+              k_row = 5,
+              main = "ASHS Output",
+              fontsize_row =7,
+              fontsize_col = 7)
+
+
+
+
+cor()
+confounders <- ashs_bids %>% 
+  mutate(session_year = as.numeric(str_sub(FlywheelSessionLabel, 0,4))) %>% 
+  group_by(INDDID, FlywheelSessionLabel) %>% 
+  slice_head(n = 1) %>% 
+  ungroup()
+```
+## Slide with Bullets
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+## Slide with Plot
+```{r Year}
+ggplot(confounders, aes(x = left_Posterior_hippocampus, y = as.numeric(session_year))) + 
+  geom_jitter(alpha = 0.5) +
+  labs(title = 'Year')
+  
+```
+
+```{r histogram of controls}
+ggplot(confounders[confounders$diagnosis=="Normal",], aes(x = left_Posterior_hippocampus, fill = DicomInstitutionName)) +
+  geom_histogram(bins=20)
+
+
+```
+
+
+```{r Station}
+ggplot(confounders, aes(x = left_Posterior_hippocampus, fill = diagnosis)) + 
+         geom_histogram(alpha = 0.5, bins = 7) + facet_grid(vars(DicomStationName), scales = "free") +
+labs(title = 'DicomStationName')
+```
+
+```{r Institution}
+ggplot(confounders, aes(x = left_Posterior_hippocampus, fill = diagnosis)) + 
+  geom_histogram(alpha = 0.5, bins = 7) + facet_grid(vars(DicomInstitutionName), scales = "free") +
+  labs(title = 'DicomInstitutionName')
+```
+ 
+```{r}
+ggplot(confounders, aes(x = left_Posterior_hippocampus, fill = diagnosis)) + 
+  geom_histogram(alpha = 0.5, bins = 7) + facet_grid(vars(DicomSliceThickness), scales = "free") +
+  labs(title = 'DicomSliceThickness')
+```
+
+```{r}
+ggplot(confounders, aes(x = left_Posterior_hippocampus, fill = diagnosis)) + 
+  geom_histogram(alpha = 0.5, bins = 7) + facet_grid(vars(DicomPixelSpacingX)) +
+  labs(title = 'DicomPixelSpacingX')
+
+```
+```{r}
+ggplot(confounders, aes(x = left_Posterior_hippocampus, fill = diagnosis)) + 
+  geom_histogram(alpha = 0.5, bins = 7) + facet_grid(vars(DicomMagneticFieldStrength), scales = "free")+
+  labs(title = 'DicomMagneticFieldStrength')
+```
+
+
+```{r}
+
+ggplot(confounders, aes(x = left_Posterior_hippocampus, fill = diagnosis)) + 
+  geom_histogram(alpha = 0.5, bins = 7) + facet_grid(vars(DicomRepetitionTime), scales = "free") +
+  labs(title = "DicomRepetitionTime")
+
+```
+
+
+```{r}
+
+ggplot(confounders, aes(x = left_Posterior_hippocampus, fill = diagnosis)) + 
+  geom_histogram(alpha = 0.5, bins = 7) + facet_grid(vars(DicomSpacingBetweenSlices), scales = "free")+
+  labs(title = "DicomSpacingBetweenSlices")
+```
+
+
+
