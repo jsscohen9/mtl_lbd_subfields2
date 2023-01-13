@@ -1,5 +1,5 @@
 ---
-title: "Hippocampal Subfield Analyisis"
+title: "Hippocampal Subfield Analysis"
 author: "Jesse Cohen"
 date: "`r Sys.Date()`"
 output: html_document
@@ -10,6 +10,8 @@ editor_options:
 ```{r setup, include=FALSE, }
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, 
                       fig.path = "~/R_LBD Hippocampal subfields/Data/")
+
+set.seed(0122023)
 ```
 
 # Libraries
@@ -25,596 +27,333 @@ library(ggforce)
 library(arsenal)
 library(ggpubr)
 library(MatchIt)
+library(magrittr)
+library(here)
+library(randomForest)
+library(janitor)
+library(rattle)
+library(corrr)
+library(lobstr)       # Inspect R data structures.
+library(FSelector)    # Feature selection, information.gain().
+library(stringi)      # String concat operator %s+%.
+
 ```
 
 # Data Import
-```{r biomarker and imaging data import, echo=TRUE}
-# Read in data
-## All clinical LBD cases + age/sex matched controls
-clinical <- readxl::read_excel("~/R_LBD Hippocampal subfields/Data/INQuery_Output_2022.07.12_09.59_.xlsx")
-
-# Demographic data
-demographics <- readxl::read_excel("~/R_LBD Hippocampal subfields/Data/INQuery Output (2022.10.13 16.26).xlsx", sheet = 1) %>% 
-  mutate(INDDID = as.character(INDDID)) %>% 
-  mutate(Education = na_if(Education, 999))
-# 
-# # Consents (to get center enrolled from)
-# consents <- readxl::read_excel("~/R_LBD Hippocampal subfields/Data/INQuery Output (2022.11.13 18.09).xlsx", sheet = 1) %>%
-#   mutate(INDDID = as.character(INDDID))
-# 
-# names <- consents %>% group_by(ConsentName) %>% summarise(count = n()) %>% arrange(desc(count)) %>% select(ConsentName) %>% as.vector() %>% .[5:81,]
-# 
-# consents2 <- consents 
-# consents2$ConsentName <- recode(consents$ConsentName, PD = "Udall",
-#        Control = "Udall",
-#        FTD = "FTD")
-# 
-# consents2$ConsentName[consents2$ConsentName %in% c("Udall", "FTD")==F] <- "Other"
-
-## Biomarkers:
-biomarkers <- readxl::read_excel("~/R_LBD Hippocampal subfields/Data/INQuery Output (2022.10.02 09.12).xlsx", sheet = 1) %>%
-  mutate(INDDID = as.character(INDDID),
-            PET_read = Clinical_Read,
-            tau_abeta42_ratio = LuminexTTauAbetaRatio)
-  
-## ASHS results  
-ashs <- read_csv("~/R_LBD Hippocampal subfields/Data/ashs_all_output.csv") %>% 
-  mutate(session_date = str_sub(MRISession, 0, 8),
-         INDDID = as.character(INDDID)) %>% 
-  mutate(session_date = as.Date(session_date, format = '%Y%m%d')) %>% 
-  filter(Version != "0.1.1") #remove output from ASHS 0.1.1
-
+```{r munge, cache = TRUE, cache.extra = tools::md5sum('munge.R')}
+source(file = here("munge.R"))
 ```
 
-```{r neuropsych testing import}
-## Neuropsych Testing:
-#import MMSE scores
-mmse <- readxl::read_excel("~/R_LBD Hippocampal subfields/Data/INQuery Output (2022.10.26 15.44).xlsx", sheet = 1) %>% 
-  mutate(INDDID = as.character(INDDID))
+<!-- ## Confirm AD_present is consistent for each INDDID -->
+<!-- ```{r confirm concordant ad_present} -->
+<!-- # Take biomarkers dataframe in which each row has single biomarker test for each INDDID  -->
+<!-- # and make table with ad present or absent for each INDDID -->
+<!-- df_ad_present <-  -->
+<!--   biomarkers %>%  -->
+<!--   select(INDDID, ad_present, diagnosis, ad_present, abc, PET_read, tau_abeta42_ratio, CSFDate) %>%  -->
+<!--   filter(is.na(ad_present)==F) %>% #remove any rows with NAs -->
+<!--   group_by(INDDID) %>%  -->
+<!--   summarise(ad_dx_unique = mean(ad_present)) #if the mean is not 0 or 1 then it has conflicting ad_present  -->
 
-#import MOCA scores
-moca <- readxl::read_excel("~/R_LBD Hippocampal subfields/Data/INQuery Output (2022.10.26 16.08).xlsx", sheet = 1) %>% 
-  mutate(INDDID = as.character(INDDID))
+<!-- #remove individuals with conflicting ad_present -->
+<!-- df_ad_present <- -->
+<!--   df_ad_present %>%  -->
+<!--   filter(ad_dx_unique == 0 | ad_dx_unique == 1) %>%  -->
+<!--   mutate(ad_present = ifelse(ad_dx_unique == 1, TRUE,  -->
+<!--                              ifelse(ad_dx_unique == 0, FALSE, -->
+<!--                                     NA))) %>%  -->
+<!--   select(INDDID, ad_present) -->
 
-#both HVLT and PVLT
-vlt <- readxl::read_excel("~/R_LBD Hippocampal subfields/Data/INQuery Output (2022.11.08 09.42).xlsx", sheet = 1) %>% 
-  mutate(INDDID = as.character(INDDID))
+<!-- d <- d %>% filter(INDDID %in% df_ad_present$INDDID | diagnosis == "Normal") #include only cases with clear ad_present status, as well as Normal controls -->
 
+<!-- remove(df_ad_present) -->
+<!-- ``` -->
 
-hvlt <- vlt %>% select(`INDDID(1)`:HVLR_version_num) %>% 
-  distinct() %>%
-  rename(INDDID = `INDDID(1)`) %>% 
-  filter(is.na(INDDID) ==F) %>% 
-  mutate(INDDID = as.character(INDDID))
+# Data Import Template
+```{r initialize}
+# input
+mri_selected_ashs <- read_rds(here("objects/mri_selected_ashs_all.RDS"))
 
+# Initialise the dataset as per the template.
+dsname <- "mri_selected_ashs"
+ds     <- get(dsname)
 
-pvlt <- vlt %>% select(`INDDID(2)`:PHLTuesTotalFoils) %>% 
-  distinct() %>% 
-  rename(INDDID = `INDDID(2)`) %>% 
-  filter(is.na(INDDID) ==F) %>%
-  mutate(INDDID = as.character(INDDID)) %>% 
-  filter(is.na(PHLRecognitionDiscrimin) == F) #remove individuals who could not finish
+ds %>% sample_frac()
 
-#Epworth Sleepiness Scale
-epworth <- readxl::read_excel("~/R_LBD Hippocampal subfields/Data/INQuery Output (2022.10.04 17.59).xlsx", sheet = 1) %>% 
-  mutate(INDDID = as.character(INDDID))
+glimpse(ds)
 ```
 
-## Split ASHS into T1 and T2 data
-
-## Select only T1 scans
+Normalize variable names automatically
 ```{r}
-ashs_t1 <- ashs %>% 
-  filter(Version == '0.2.0_t1') %>% 
-  distinct()
+# Capture the original variable names for use in plots.
 
-ashs_t2 <- ashs %>% 
-  filter(Version == '0.2.0') %>% 
-  distinct()
-```
+vnames <- names(ds)
 
-## Then pivot_wider to move subfield volumes into single row per subject
-```{r pivot_wider volumes into single row per subject}
-ashs_t1 <- ashs_t1 %>% 
-  select(-Label, -Input) %>%
-  unite(region, Hemisphere, Region) %>%
-  pivot_wider(id_cols = c(INDDID, MRISession, Version, session_date), names_from = region, values_from = Volume) %>% 
-  ungroup() 
+# Normalise the variable names.
 
-ashs_t2<- ashs_t2 %>% 
-  select(-Label, -Input) %>%
-  unite(region, Hemisphere, Region) %>%
-  pivot_wider(id_cols = c(INDDID, MRISession, Version, session_date), names_from = region, values_from = Volume) %>% 
-  ungroup() 
-```
+ds %<>% clean_names(numerals="right")
 
-# Data Tidying
-## Phenotype cleanup
-```{r phenotype cleanup ,echo=TRUE}
-# assign "MotorDx" and "CognitiveDx" to ClinicalPhenotype_Sum for those without "ClinicalPhenotype1"
-clinical <- 
-  clinical %>%
-  replace_na(list(MotorDx1 = "NA", CognitiveDx = "NA")) %>% #to be able to concatenate them later
-  mutate(ClinicalPhenotype_sum = 
-           ifelse(
-             is.na(ClinicalPhenotype1) == T, 
-                   str_c(MotorDx1, CognitiveDx, sep = " "),
-                   ClinicalPhenotype1)) %>% 
-  mutate(ClinicalPhenotype_sum = recode(ClinicalPhenotype_sum, 
-         `Parkinson Disease Normal` = "PD",
-         `Parkinson Disease MCI` = "PD-MCI",
-         `Parkinson Disease NA` = "PD",
-         `DLB MCI` = "DLB-MCI",
-         `DLB NA` = "DLB"))
+# Confirm the results are as expected.
 
-# Recode to condense groups
-clinical <- clinical %>% 
-  select(INDDID,
-         ClinicalPhenotype1, 
-         ClinicalPhenotype_sum,
-         MotorDx1,
-         CognitiveDx,
-         everything()) %>% 
-  mutate(ClinicalPhenotype_sum = recode(ClinicalPhenotype_sum,   # condense dx groups 
-                                   `Parkinson Disease` = "PD",
-                                   `Parkinson Disease Dementia` = "PDD",
-                                   `DLB-MCI` = "DLB", `PD-MCI` = "PD"),
-         INDDID = as.character(INDDID)) %>% 
-  select(INDDID, diagnosis = ClinicalPhenotype_sum, mri_date = FlywheelSessionTimestampUTC, session_id = FlywheelSessionInternalID)
+names(ds)
+
+# Index the original variable names by the new names.
+
+names(vnames) <- names(ds)
+
+vnames
+
+# Note the available variables.
+
+vars <- names(ds) %T>% print()
 
 ```
+
+Character variables 
+```{r}
+# Identify the character variables by index.
+
+ds %>%
+  sapply(is.character) %>%
+  which() %T>%
+  print() ->
+chari
+
+# Identify the character variables by name.
+
+ds %>% 
+  names() %>% 
+  '['(chari) %T>% 
+  print() ->
+charc
+
+# Observe the unique levels.
+
+ds[charc] %>% sapply(unique)
+
+# How many diagnoses are represented in the dataset.
+
+ds$diagnosis %>% 
+  unique() %>%
+  length()
+
+# Here is a list of diagnoses and their frequencies in the dataset
+ds$diagnosis %>%
+  table()
+```
+
+Convert character to numeric where needed
+```{r}
+# Identify the vairables to process.
+
+cvars <- c("session_year")
+
+# Check the current class of the variables.
+
+ds[cvars] %>% sapply(class)
+```
+```{r}
+# Convert to numeric.
+
+ds[cvars] %<>% sapply(as.numeric)
+
+# Review some random values.
+
+sample(ds$session_year, 10)
+```
+Convert character to factor where needed
+```{r}
+# Review the distribution of observations across levels.
+
+ds %>%
+  select(diagnosis, sex, race, ad_present) %>%
+  sapply(table)
+
+```
+```{r}
+# Note the names of the desired variables.
+
+ds %>% 
+  select(diagnosis, sex, race, ad_present) %>% 
+  names() %T>%
+  print() ->
+vnames
+
+# Convert these variables from character to factor.
+
+ds[vnames] %<>% 
+  lapply(factor, ordered = FALSE) %>% 
+  data.frame() %>% 
+  as_tibble()
+
+# Confirm they are now factors.
+
+ds[vnames] %>% sapply(class)
+```
+```{r}
+# Verify the distribution has not changed.
+
+ds %>%
+  select(all_of(vnames)) %>%
+  sapply(table)
+
+```
+
+Numeric Variables
+```{r}
+ds %>%
+  sapply(is.numeric) %>%
+  which() %>%
+  names %T>%
+  print() ->
+numi
+
+ds[numi] %>% 
+  summary()
+```
+
 
 ```{r}
-#join dx with biomarkers 
-clinical_dx <- clinical %>% 
-  select(INDDID, diagnosis) %>% 
-  distinct()
+# Note the identifiers.
 
-biomarkers <- biomarkers %>% 
-  left_join(clinical_dx, by = "INDDID") %>% 
-  select(INDDID, -`INDDID(1)`, diagnosis, everything()) 
+id <- c("inddid", "session_date", "flywheel_session_label")
+
+# Initialise ignored variables: identifiers.
+
+ignore <- c(id)
+
+# Heuristic for candidate indentifiers to possibly ignore.
+
+ds[vars] %>%
+  sapply(function(x) x %>% unique() %>% length()) %>%
+  equals(nrow(ds)) %>%
+  which() %>%
+  names() %T>%
+  print() ->
+ids
+
+```
+Once we have identified all of the variables to ignore we remove them from our list of variables to use.
+```{r}
+# Check the number of variables currently.
+
+length(vars)
+
+# Remove the variables to ignore.
+
+vars <- setdiff(vars, ignore)
+
+# Confirm they are now ignored.
+
+length(vars)
 ```
 
-## Classify AD Positive or Negative
-```{r AD-copathology classification, echo=TRUE}
+# Data Exploration
 
-## Autopsy classifications
-
-#convert Braak03 to Braak06
-biomarkers$Braak06[is.na(biomarkers$Braak06) == TRUE & biomarkers$Braak03 == "0"] <- "0"
-biomarkers$Braak06[is.na(biomarkers$Braak06) == TRUE & biomarkers$Braak03 == "1"] <- "2"
-biomarkers$Braak06[is.na(biomarkers$Braak06) == TRUE & biomarkers$Braak03 == "2"] <- "4"
-biomarkers$Braak06[is.na(biomarkers$Braak06) == TRUE & biomarkers$Braak03 == "3"] <- "6"
-
-#add column with ABC level
-biomarkers$abc[biomarkers$ABeta == "0" & biomarkers$CERAD == "0"] <- "Not"
-biomarkers$abc[biomarkers$ABeta %in% c("1","2") & biomarkers$CERAD %in% c("0","1")] <- "Low"
-biomarkers$abc[biomarkers$ABeta %in% c("1","2") & biomarkers$CERAD %in% c("2","3") & biomarkers$Braak06 %in% c("0","1", "2")] <- "Low"
-biomarkers$abc[biomarkers$ABeta %in% c("1","2")  & biomarkers$CERAD %in% c("2","3") & biomarkers$Braak06 %in% c("3","4","5","6")] <- "Intermediate"
-biomarkers$abc[biomarkers$ABeta == "3" & biomarkers$Braak06 %in% c("0","1", "2")] <- "Low"
-biomarkers$abc[biomarkers$ABeta == "3" & biomarkers$Braak06 %in% c("3","4","5","6")] <- "Intermediate"
-biomarkers$abc[biomarkers$ABeta %in% c("4","5") & biomarkers$CERAD %in% c("0","1") & biomarkers$Braak06 %in% c("0","1", "2")] <- "Low"
-biomarkers$abc[biomarkers$ABeta %in% c("4","5") & biomarkers$CERAD %in% c("0","1") & biomarkers$Braak06 %in% c("3","4","5","6")] <- "Intermediate"
-biomarkers$abc[biomarkers$ABeta %in% c("4","5") & biomarkers$CERAD %in% c("2","3") & biomarkers$Braak06 %in% c("0","1", "2")] <- "Low"
-biomarkers$abc[biomarkers$ABeta %in% c("4","5") & biomarkers$CERAD %in% c("2","3") & biomarkers$Braak06 %in% c("3","4")] <- "Intermediate"
-biomarkers$abc[biomarkers$ABeta %in% c("4","5") & biomarkers$CERAD %in% c("2","3") & biomarkers$Braak06 %in% c("5","6")] <- "High"
-  
-
-# Classify as ad_present or not
-#autopsy
-biomarkers$ad_present[biomarkers$abc %in% c("Intermediate", "High")] <- TRUE
-biomarkers$ad_present[biomarkers$abc %in% c("Not", "Low")] <- FALSE
-
-#pet
-biomarkers$ad_present[is.na(biomarkers$ad_present) == TRUE & biomarkers$PET_read == "Positive"] <- TRUE
-biomarkers$ad_present[is.na(biomarkers$ad_present) == TRUE & biomarkers$PET_read == "Negative" ] <- FALSE
-
-#csf
-biomarkers$ad_present[is.na(biomarkers$ad_present) == TRUE & biomarkers$tau_abeta42_ratio > 0.3] <- TRUE
-biomarkers$ad_present[is.na(biomarkers$ad_present) == TRUE & biomarkers$tau_abeta42_ratio <= 0.3] <- FALSE
+A random sample of the dataset:
+```{r}
+ds %>% sample_frac()
 ```
-
-## Calculate MRI-Biomarker Interval
-```{r biomarker-mri interval}
-mri_dates <- ashs_t1 %>% select(INDDID, MRISession, session_date)
-
-#calculate time between MRI and biomarker 
-biomark_and_mri <- biomarkers %>% 
-  left_join(mri_dates, by = "INDDID") %>%
-  mutate(intvl_autopsy = as.numeric(as.Date(AutopsyDate) - as.Date(session_date))/365,
-         intvl_pet = ifelse(PETTracer %in% c("Florbetaben (amyloid)", "Florbetapir (amyloid)") == T, 
-                            as.numeric(as.Date(PETDate) - as.Date(session_date))/365,
-                            NA),
-         intvl_csf = ifelse(is.na(tau_abeta42_ratio) == F,
-                            as.numeric(as.Date(CSFDate) - as.Date(session_date))/365,
-                            NA))
+ 
+Count groups:
+```{r}
+ds %>% count(diagnosis)
 
 ```
 
-## Number of MRIs/Subject with Biomarkers Available
-```{r MRIs per subject with biomarkers}
-clinical %>% 
-  group_by(INDDID) %>% 
-  mutate(rowcount = n()) %>% 
-  filter(rowcount > 1) %>% 
-  select(INDDID) %>% 
-  distinct() %>% 
-  filter(INDDID %in% clinical$INDDID[clinical$diagnosis !="Normal"]) %>% 
-  filter(INDDID %in% biomark_and_mri$INDDID[is.na(biomark_and_mri$AutopsyDate)==F | 
-                                              biomark_and_mri$PETTracer %in% c("Florbetaben (amyloid)", "Florbetapir (amyloid)") |
-                                              is.na(biomark_and_mri$tau_abeta42_ratio) == F])
 
+Constants
+```{r}
+# Identify variables that have a single value.
 
-#206 subjects have >1 MRI 
-#114 are cases 
-#88 are cases and have biomakers available
+ds %>%
+  select(all_of(vars)) %>%
+  sapply(function(x) all(x == x[1L])) %>%
+  which() %>%
+  names() %T>%
+  print() ->
+constants
 
 ```
 
-## Select MRI to use for each subject
-```{r MRI to use for each subject}
-# for those with an autopsy
-autopsy_mris <- biomark_and_mri %>% 
-  mutate(ad_marker = "autopsy") %>% 
-  group_by(INDDID) %>%
-  filter(intvl_autopsy < 5,
-         is.na(NPDx1) == F) %>% 
-  filter(intvl_autopsy == max(intvl_autopsy)) %>% #take earliest MRI within 5 years of autopsy 
-  distinct() %>% 
-  ungroup()
+Correlated variables
+```{r}
+# For the numeric variables generate a table of correlations
 
-#censored participants with autopsy - make sure that if they are included with other biomarkers that it is concordant with autopsy result
-autopsy_mris_censored <- biomark_and_mri %>% 
-  select(INDDID, intvl_autopsy, session_date, NPDx1) %>% 
-  group_by(INDDID) %>%
-  filter(intvl_autopsy >= 5,
-         is.na(NPDx1) == F) %>% 
-  filter(intvl_autopsy == max(intvl_autopsy)) %>% #take earliest MRI within 5 years of autopsy 
-  filter(INDDID %in% autopsy_mris$INDDID == F) %>% 
-  distinct() %>% 
-  ungroup()
+ds %>%
+  correlate() %>%
+  shave() %>%
+  fashion()
 
+ds %>%
+  correlate() %>%
+  rearrange() %>%
+  rplot()
 
-# for PET
-pet_mris <- biomark_and_mri %>%
-  mutate(ad_marker = "pet") %>% 
-  filter(INDDID %in% autopsy_mris$INDDID == F) %>% 
-  group_by(INDDID) %>% 
-  mutate(intvl_pet = abs(intvl_pet)) %>% 
-  filter(intvl_pet < 5) %>%
-  filter(intvl_pet == min(intvl_pet)) %>%
-  distinct() %>% 
-  ungroup()
+ds %>%
+  corrr::correlate() %>%
+  shave() %>%
+  stretch() %>%
+  filter(abs(r) > 0.90)
 
-#censored PET due to >= 5 years 
-pet_mris_censored <- biomark_and_mri %>%
-  filter(INDDID %in% autopsy_mris$INDDID == F &
-           INDDID %in% pet_mris$INDDID == F) %>% 
-  select(INDDID, intvl_pet, session_date, PETTracer) %>% 
-  group_by(INDDID) %>% 
-  mutate(intvl_pet = abs(intvl_pet)) %>% 
-  filter(intvl_pet >= 5) %>%
-  filter(intvl_pet == min(intvl_pet)) %>% 
-  distinct() %>% 
-  ungroup()
+ds %>%
+  correlate() %>%
+  rearrange() %>% 
+  focus(age_at_mri) 
 
 
-#for CSF
-csf_mris <- biomark_and_mri %>%
-  mutate(ad_marker = "csf") %>% 
-  filter(INDDID %in% autopsy_mris$INDDID == F &
-         INDDID %in% pet_mris$INDDID == F) %>% 
-  group_by(INDDID) %>% 
-  mutate(intvl_csf = abs(intvl_csf)) %>% 
-  filter(intvl_csf < 5) %>%
-  filter(intvl_csf == min(intvl_csf)) %>% 
-  distinct() %>% 
-  ungroup()
-
-#censored CSF due to >= 5 years
-csf_mris_censored <- biomark_and_mri %>%
-  filter(INDDID %in% autopsy_mris$INDDID == F &
-         INDDID %in% pet_mris$INDDID == F &
-           INDDID %in% csf_mris$INDDID == F) %>% 
-  select(INDDID, intvl_csf, session_date, tau_abeta42_ratio) %>% 
-  group_by(INDDID) %>% 
-  mutate(intvl_csf = abs(intvl_csf)) %>% 
-  filter(intvl_csf >= 5) %>%
-  filter(intvl_csf == min(intvl_csf)) %>% 
-  distinct() %>% 
-  ungroup()
-
-#selected subjects
-subs_included <- union(autopsy_mris$INDDID, pet_mris$INDDID) %>% union(., csf_mris$INDDID)
-
-#potentially censored subjects
-subs_censored <- union(autopsy_mris_censored$INDDID, pet_mris_censored$INDDID) %>% union(., csf_mris_censored$INDDID)
-
-#these were excluded from one marker but included based on another
-check_markers_agree <- intersect(subs_included, subs_censored)
-
-#confirm that in subjects for whom autopsy was >5 years, the PET or CSF concurs with the autopsy dx; (i.e. INDDID 107995 would be positive by autopsy but negative by CSF whereas 107633 is positive by both)
-# multiple_markers <- tibble(INDDID = check_markers_agree) %>% left_join(biomark_and_mri, by = "INDDID") %>% 
-#   select(INDDID, intvl_autopsy, intvl_pet, intvl_csf, NPDx1, abc, PET_read, tau_abeta42_ratio, ad_present, CSFDate, session_date)  %>% 
-#   distinct()
-
-
-remove(subs_censored, subs_included, check_markers_agree, multiple_markers)
+ds %>%
+  correlate() %>%
+  network_plot()
 ```
 
-## Combine Data Frames
-```{r combine data frames}
-#get MRI volumes for all subjects in one table 
-df_markers <- bind_rows(autopsy_mris, pet_mris, csf_mris) %>% 
-  select(INDDID, session_date, intvl_autopsy, intvl_pet, intvl_csf, everything()) 
+# Data Wrangling
+It is always useful to remind ourselves of the dataset with a random sample:
+```{r}
+ds  %>% sample_frac() %>% select(sample(2:length(vars), 5))
+```
+```{r}
+glimpse(ds)
+```
 
-#create invtl_marker variable to based on which intvl is used
-df_markers <-
-  df_markers %>%
-  group_by(INDDID) %>%
-  mutate(intvl_marker = ifelse(ad_marker == "autopsy",
-                               intvl_autopsy,
-                               ifelse(ad_marker == "pet",
-                                          intvl_pet,
-                                          ifelse(ad_marker == "csf",
-                                                 intvl_csf,
-                                                 NA))))
+Missing values
+```{r}
+# Count the number of missing values.
+
+ds %>% is.na() %>% sum()
+
+# No missing values in the first two columns (INDDID and diagnosis)
+
+ds[1:2] %>% is.na() %>% sum()
+
+ds$education %<>% na.roughfix()
+
+# Confirm that no missing values remain.
+
+ds %>% is.na() %>% sum()
+
 
 ```
 
-## Remove Controls with Positive Amyloid PET
-```{r controls with + amyloid PET}
-#controls with +PET
-controls_remove <- df_markers %>% 
-  filter(diagnosis == "Normal" &
-                ad_present == T) %>% 
-  select(INDDID) %>% 
-  distinct()
-
-# df1 <- clinical %>% 
-  # select(INDDID, diagnosis) %>% 
-  # filter(diagnosis == "Normal") %>% 
-  # distinct() %>% 
-  # left_join(biomark_and_mri) %>% 
-  # full_join(df_markers[df_markers$diagnosis != "Normal",]) %>% #don't doubly include the "normal" dx participants
-  # filter(INDDID %in% controls_remove$INDDID == F) #remove any normals with +PET
-
-df1 <- df_markers %>% 
-  filter(INDDID %in% controls_remove$INDDID == F) #remove any normals with +PET
-
-  
-```
-
-## Select MRI session
-```{r select MRI}
-#create session year variable
-df1$session_year <- lubridate::epiyear(df1$session_date)
-
-#some individuals had multiple MRI sessions still since they were selected based on "min" intvl between biomarker and mri; if they were done on the same day then there can be multiple MRIs that matched the "min" intvl
-#in those cases, use the later MRI
-df2<- 
-  df1 %>% 
-  group_by(INDDID) %>% 
-  filter(session_date == max(session_date)) %>% #selects later MRI (may want to add QC control here)
-  filter(str_sub(MRISession,start = -4) == max(str_sub(MRISession,start = -4))) %>% 
-  distinct() %>% 
-  ungroup()
-
-df2$case_status[df2$diagnosis == "Normal"] <- "control"
-df2$case_status[df2$diagnosis %in% c("DLB", "PD", "PDD")] <- "case"
-
-table(df2$case_status)
-
-#remove unnecessary objects
-remove(df_markers, df1, controls_remove, autopsy_mris_censored, pet_mris_censored, csf_mris_censored, autopsy_mris, pet_mris, csf_mris)
-```
-
-## Remove Individuals Younger than 60
-```{r remove young subjects}
-d <-
-df2 %>% 
-  left_join(demographics, by = "INDDID") %>% 
-  filter(YOB<1963) %>% #remove individuals less than 60 
-  select(INDDID, diagnosis, case_status, ad_marker, intvl_marker, ad_present, session_year, Sex, Race, YOB, Education, Deceased, MRISession, everything()) 
-```
-
-## Confirm AD_present is consistent for each INDDID
-```{r }
-# Take biomarkers dataframe in which each row has single biomarker test for each INDDID 
-# and make table with ad present or absent for each INDDID
-df_ad_present <- 
-  biomarkers %>% 
-  select(INDDID, ad_present, diagnosis, ad_present, abc, PET_read, tau_abeta42_ratio, CSFDate) %>% 
-  filter(is.na(ad_present)==F) %>% #remove any rows with NAs
-  group_by(INDDID) %>% 
-  summarise(ad_dx_unique = mean(ad_present)) #if the mean is not 0 or 1 then it has conflicting ad_present 
-
-#remove individuals with conflicting ad_present
-df_ad_present <-
-  df_ad_present %>% 
-  filter(ad_dx_unique == 0 | ad_dx_unique == 1) %>% 
-  mutate(ad_present = ifelse(ad_dx_unique == 1, TRUE, 
-                             ifelse(ad_dx_unique == 0, FALSE,
-                                    NA))) %>% 
-  select(INDDID, ad_present)
-
-d <- d %>% filter(INDDID %in% df_ad_present$INDDID | diagnosis == "Normal") #include only cases with clear ad_present status, as well as Normal controls
-
-remove(df_ad_present)
-```
-
-### Remove subjects with missing education
-```{r remove subjects with missing Education}
-d<- d %>% 
-  filter(is.na(Education)==F) %>% 
-  filter(Education > 1)
-```
-
-### Add age at MRI variable
-```{r add age at MRI variable}
-d$age_at_mri <- d$session_year - d$YOB
-
-remove(df2)
-```
-
-# Output "clean_raw", remove other objects 
-```{r cleaned raw dataframe}
-clean_raw <- d  
-remove(d, ashs, ashs_t1, biomark_and_mri, biomarkers, clinical, clinical_dx, demographics)
-```
-
-# Verbal memory
-Caveats with combining the two scores: as opposed to HVLT, PVLT looks at effect of distractors - after trial 5 adds a distractor list. Will z-score within each test within domains of learning (immediate recall), delayed recall (including "rapid forgetting index" of number on delayed recall:best immediate recall score), recognition (recognition discrimination index).
--Need to show consistent relationships between domains in HVLT vs PVLT in order to legitimize combining them 
-- will use score closest in time to MRI that occurs after MRI, since in mediation analysis the cognitive test has to come after the MRI  
-
-Steps:
-1. find VLT closest to MRI date but occurring after
-2. z-scores for each domain:
-PVLT learning  - 1-5 trials total. also z-scores for each individual trial and then average those z scores
-delayed - (Trial 9)
-recognition - recognition discrimination score
-
-HVLT learning - Total recall score. also z-scores for each individual trial then average those z scores
-delayed - including Rapid forgetting index (%retained - measures what is lost between highest score in immediate recall and delayed recall)
-recognition - recognition discrimination index 
-
---> subsequently can include MOCA/MMSE z-scores in the final model to adjust for global cognition
-
-
-```{r verbal memory}
-#find verbal memory test closest to mri date for each subject
-
-verbal_date <- clean_raw %>% 
-  left_join(vlt, by="INDDID") %>%
-  filter(diagnosis != "Normal") %>% 
-  mutate(session_date = str_sub(MRISession, 0, 8)) %>% 
-  mutate(session_date = as.Date(session_date, format = '%Y%m%d')) %>%
-  select(INDDID, diagnosis, ad_present, session_date, hvlt_date = TestDate, pvlt_date = `TestDate(1)`, everything()) %>%
-  filter(is.na(PHLRecognitionDiscrimin) == F) %>% 
-  pivot_longer(cols = c("hvlt_date", "pvlt_date"), names_to = "test", values_to = "test_date") %>% 
-  mutate(intvl_test = as.numeric(as.Date(test_date) - as.Date(session_date))/365) %>% 
-  select(INDDID, diagnosis, ad_present, session_date, intvl_test, test, test_date) %>% distinct() %>% 
-  filter(is.na(intvl_test)==F) %>% 
-  filter(intvl_test > 0) %>% 
-  group_by(INDDID) %>% 
-  filter(intvl_test == min(intvl_test, na.rm = T)) %>%
-  ungroup() 
-  
-#correlation of corrected volumes with HVLT scores
-# for now with uncorrected volumes
-
-# HVLT learning - Total recall score. also z-scores for each individual trial then average those z scores
-# delayed - including Rapid forgetting index (%retained - measures what is lost between highest score in immediate recall and delayed recall)
-# recognition - recognition discrimination index 
-
-# first calculate z-scores
-# select hvlt tests to use and add columns for max immediate recall score, "rapid forgetting index" (delayed recall score/max immediate recall score)
-data <- verbal_date %>% filter(test == "hvlt_date") %>%
-  left_join(hvlt, by = c("INDDID", "test_date" = "TestDate")) %>% 
-  select(HVLTRT1, HVLTRT2, HVLTRT3, HVLTRTTotScore, HVLTRDLY, HVLTRECDISTScore) %>% 
-  rowwise() %>% 
-  mutate(immediate_max = max(HVLTRT1, HVLTRT2, HVLTRT3)) %>% 
-  mutate(remember_index = HVLTRDLY/immediate_max) %>% 
-  mutate()
-
-z_scores <- sapply(data, function(data) (data-mean(data))/sd(data))
-  
-#rename z_score column names 
-original_cols <- colnames(z_scores) 
-colnames(z_scores) <- paste0(original_cols, "_z_score")
-
-#rejoin to original df
-hvlt_normed <- verbal_date %>% filter(test == "hvlt_date") %>% cbind(., data, z_scores) %>% as.tibble()
-
-#create new column for mean of immediate recall z-scores
-hvlt_normed <- hvlt_normed %>% 
-  rowwise() %>% 
-  mutate(immediate_z_score_mean = mean(HVLTRT1_z_score, HVLTRT2_z_score, HVLTRT3_z_score)) 
-  
-### Library
-library(heatmaply)
-
-### Data
-df <- hvlt_normed %>% select(16:24)
-
-### Let's Plot
-hvlt_heatmap <- heatmaply_cor(x = cor(df),
-              xlab = "Features",
-              ylab = "Features",
-              k_col = 2,
-              k_row = 2,
-              main = "HVLT Z-scores")
-
-# PVLT
-#remove individuals who couldn't complete the test
-pvlt <- pvlt %>% filter(is.na(PHLRecognitionDiscrimin)==F)
-
-data <- verbal_date %>% filter(test == "pvlt_date") %>%
-  left_join(pvlt, by = c("INDDID", "test_date" = "TestDate(1)")) %>% 
-  select(PHLCorrectTrial1, PHLCorrectTrial2, PHLCorrectTrial3, PHLCorrectTrial4, PHLCorrectTrial5,
-         PHLCorrect15Total, PHLCorrectTrial9, PHLRecognitionDiscrimin) %>% 
-  filter(is.na(PHLRecognitionDiscrimin)==F) %>% 
-  rowwise() %>% 
-  mutate(immediate_max = max(PHLCorrectTrial1, PHLCorrectTrial2, PHLCorrectTrial3, PHLCorrectTrial4, PHLCorrectTrial5)) %>% 
-  mutate(remember_index = PHLCorrectTrial9/immediate_max) 
-
-z_scores <- sapply(data, function(data) (data-mean(data))/sd(data))
-  
-#rename z_score column names 
-original_cols <- colnames(z_scores) 
-colnames(z_scores) <- paste0(original_cols, "_z_score")
-
-#rejoin to original df
-pvlt_normed <- verbal_date %>% filter(test == "pvlt_date") %>%
-  cbind(., data, z_scores) %>% as.tibble()
-
-#create new column for mean of immediate recall z-scores
-pvlt_normed <- pvlt_normed %>% 
-  rowwise() %>% 
-  mutate(immediate_z_score_mean = mean(PHLCorrectTrial1_z_score, PHLCorrectTrial2_z_score, PHLCorrectTrial3_z_score, PHLCorrectTrial4_z_score, PHLCorrectTrial5_z_score)) 
-
-### Data
-df <- pvlt_normed %>% select(18:28)
-
-### Let's Plot
-pvlt_heatmap <- heatmaply_cor(x = cor(df),
-              xlab = "Features",
-              ylab = "Features",
-              k_col = 3,
-              k_row = 3,
-              main = "PVLT Z-scores")
-
-
-hvlt_heatmap
-pvlt_heatmap
-
-remove(df, hvlt_heatmap, pvlt_heatmap, z_scores, original_cols, data)
-
-#
-heatmap of both 
-
-total, delay, memory, and recall
-```
 
 # Results
 
 ## Density Plots numerical variables
 ```{r, results = 'asis'}
-clean_raw %>%
+ds %>%
   keep(is.numeric) %>%                     # Keep only numeric columns
   gather() %>%                             # Convert to key-value pairs
   ggplot(aes(value)) +  
   theme(axis.text.x = element_text(size = 4)) +
   facet_wrap(~ key, scales = "free") +   # In separate panels
-    geom_hist() + 
+    geom_histogram() + 
   theme(strip.text.x = element_text(size = 6))
 ```
 
 
 ## Boxplots  numerical variables
 ```{r, results = 'asis'}
-clean_raw %>%
+ds %>%
   keep(is.numeric) %>%                     # Keep only numeric columns
   gather() %>%                             # Convert to key-value pairs
   ggplot(aes(value)) +                     # Plot the values
@@ -629,45 +368,43 @@ clean_raw %>%
 ## Table 1: Demographics and Clinical Data
 ```{r Table 1}
 #cleaned unadjusted data:
-clean_raw
+ds
 
 #add labels
-label(clean_raw$ad_marker) <- "AD Marker"
-label(clean_raw$intvl_marker) <- "AD Marker to MRI"
-label(clean_raw$session_year) <- "Year of MRI"
-label(clean_raw$ad_present) <- "AD+"
-label(clean_raw$diagnosis) <- "Clinical Diagnosis"
-label(clean_raw$age_at_mri) <- "Age"
-label(clean_raw$Sex) <- "Sex at Birth"
-units(clean_raw$Education) <- "years"
-units(clean_raw$intvl_marker) <- "years"
+label(ds$session_year) <- "Year of MRI"
+label(ds$ad_present) <- "AD+"
+label(ds$diagnosis) <- "Clinical Diagnosis"
+label(ds$age_at_mri) <- "Age"
+label(ds$sex) <- "Sex at Birth"
+units(ds$education) <- "years"
   
 #reorder levels for table display
-clean_raw$diagnosis <- factor(clean_raw$diagnosis, 
+ds$diagnosis <- factor(ds$diagnosis, 
                                  levels = c("DLB", "PDD", "PD", "Normal"))
 
-clean_raw$ad_marker <- factor(clean_raw$ad_marker, 
-                                 levels = c(Autopsy = "autopsy", PET = "pet", CSF ="csf"))
-
-clean_raw$Race <- fct_collapse(clean_raw$Race, White = "White", `Non-White or Unknown` = c("More than One Race", "Black or African American",
+ds$race <- fct_collapse(ds$race, White = "White", `Non-White or Unknown` = c("More than One race", "Black or African American",
                                                                        "Asian", "Unknown or Not Reported"))
 
-clean_raw$Race <- factor(clean_raw$Race, levels = c("White", "Non-White or Unknown"))
+ds$race <- factor(ds$race, levels = c("White", "Non-White or Unknown"))
 
-clean_raw$ad_present[clean_raw$diagnosis=="Normal"] <- "Normal"
+ds$ad_present <- as.character(ds$ad_present)
+ds$ad_present[ds$diagnosis == "Normal"] <- "Normal"
+ds$ad_present %>% table()
 
-clean_raw$ad_present <- factor(clean_raw$ad_present, 
-                             levels = c("Normal", "FALSE", "TRUE"), 
+ds$ad_present <- factor(ds$ad_present, 
+                             levels = c("Normal", "LBD-AD", "LBD+AD"), 
                              labels = c("Control", "LBD-AD", "LBD+AD"))
 
-#print table
-table1(~ age_at_mri + Sex + Race + Education + diagnosis| ad_present, data = clean_raw, topclass="Rtable1-grid")
+ds$ad_present %>% table()
 
-df_tbl1_marker <- clean_raw %>% 
+#print table
+table1(~ age_at_mri + sex + race + education + diagnosis| ad_present, data = ds, topclass="Rtable1-grid", )
+
+df_tbl1_marker <- ds %>% 
   filter(diagnosis!="Normal")
 
 #print table
-table1(~ Sex + Race + age_at_mri + diagnosis + ad_marker + Education + Deceased | ad_present, data = df_tbl1_marker)
+table1(~ sex + race + age_at_mri + diagnosis + education | ad_present, data = df_tbl1_marker)
 
 remove(df_tbl1_marker)
 ```
@@ -676,8 +413,8 @@ remove(df_tbl1_marker)
 ## Figure 1: Subregion Volumes, unadjusted
 ```{r subregion vols raw}
 #obtain order of regions by mean volume 
-df_raw_vol <- clean_raw %>% select(INDDID, ad_present, contains(c("left_", "right_"))) %>% 
-  select(-contains(c("MISC", "Meninges", "ICV", "Sul"))) %>% 
+df_raw_vol <- ds %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>% 
+  select(-contains(c("MISC", "Meninges", "icv", "sul"))) %>% 
   pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>% 
   mutate(ad_present = as.factor(ad_present))
 
@@ -686,8 +423,8 @@ df_raw_vol %>%
   summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol)) 
 
 df_raw_vol$Region <- recode_factor(df_raw_vol$Region, 
-                           left_Anterior_hippocampus= "L Ant Hip",
-                           right_Anterior_hippocampus = "R Ant Hip",
+                           left_anterior_hippocampus= "L Ant Hip",
+                           right_anterior_hippocampus = "R Ant Hip",
                            left_Posterior_hippocampus = "L Post Hip", 
                            right_Posterior_hippocampus = "R Post Hip",
                            left_Br36 = "L Br36",
@@ -720,20 +457,20 @@ ggplot(df_raw_vol, aes(x = ad_present, y = Volume)) +
 remove(df_raw_vol)
 ```
 
-## Regression with unadjusted volumes
+# Regression with unadjusted volumes
 Is AD case status a predictor of volume?
 
 ```{r regression using unadjusted vols, echo=TRUE}
 # create cases_df
-cases_df <- clean_raw %>%  select(-contains(c("MISC", "Meninges"))) %>% filter(diagnosis != "Normal") %>% 
+cases_df <- ds %>%  select(-contains(c("misc", "meninges"))) %>% filter(!diagnosis %in% c("Normal")) %>% 
   mutate(ad_present = ifelse(ad_present == "LBD+AD", 1,
                               ifelse(ad_present == "LBD-AD", 0,
                                       "NA")))
 
 # Position of variables in data frame to be used in for loop
 # region raw volume
-vol_start <- grep("left_Anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars
-vol_end <- grep("right_OTSul$", colnames(cases_df)) #column index to end
+vol_start <- grep("left_anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars
+vol_end <- grep("right_ot_sul$", colnames(cases_df)) #column index to end
 vol_nvar <- vol_end - vol_start + 1
 
 # shift within df 
@@ -741,7 +478,6 @@ out_shift <- vol_start - 1
   
 #For loop
 dat <- cases_df
-out <- vector('list', length(vol_nvar))
 out_mod <- vector('list', length(vol_nvar))
 i <- vol_start
   
@@ -776,10 +512,8 @@ z <- z %>% mutate(region = names(out_mod[i]))
 df <- rbind(df, z)
 }
 
-df1 <- df %>% filter(region != "model_right_OTSul",
-                     region != "model_left_OTSul",
-                     region != "model_right_ColSul",
-                     region != "model_left_ColSul") %>% arrange(conf.high) %>% 
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(conf.high) %>% 
   mutate(region = str_remove(region, "model_"),
          region = str_replace(region, "_", " ")) %>% 
   select(Region = "region", `Estimate` = "estimate", `S.E.` = "std.error", p = "p.value", `2.5% CI` = "conf.low", 
@@ -793,6 +527,132 @@ kable_classic_2(table)
 
 remove(df, df1, z, table, out_mod_summary, vol_end, vol_nvar, vol_start, dat, out, out_mod)
 ```
+
+# Regression with Adjusted Volumes, before matching
+## Calculate adjusted volumes using "predict" based on all controls
+```{r}
+# Add columns with volumes adjusted for ICV 
+
+ctrl_df <- ds %>% filter(diagnosis == "Normal")
+cases_df <- ds %>% filter(diagnosis != "Normal")
+regions <- colnames(ds) %>% .[grepl(., pattern = "*.t_.*")] %>% .[1:22] %>% noquote(.)
+
+out <- vector('list', length(regions))
+  
+
+for (i in seq_along(regions)) {
+out[[i]] <- lm(paste(regions[i], '~', 'left_icv + age_at_mri + sex'), data=ctrl_df)
+
+ctrl_df[ , ncol(ctrl_df) + 1] <- predict(out[[i]], newdata=ctrl_df)
+
+colnames(ctrl_df)[ncol(ctrl_df)] <-  paste0(regions[i], "_adjusted")
+
+cases_df[ , ncol(cases_df) + 1] <- predict(out[[i]], newdata=cases_df)
+
+colnames(cases_df)[ncol(cases_df)] <-  paste0(regions[i], "_adjusted")
+
+}
+
+d2 <- rbind(ctrl_df, cases_df)
+
+#Example correlation for L anterior hippocampus
+ggscatter(ctrl_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Controls)")
+
+ggscatter(cases_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Cases)")
+
+
+# Correlated variables
+# For the numeric variables generate a table of correlations
+
+cases_df %>%
+  corrr::correlate() %>%
+  shave() %>%
+  stretch() %>%
+  filter(abs(r) > 0.90) %>% 
+  arrange(r)
+
+```
+
+## Regression with adjusted volumes
+```{r, echo=TRUE}
+# Is AD case status a predictor of volume  
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+raw_start <- grep("left_anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars
+raw_end <- grep("right_ot_sul$", colnames(cases_df)) #column index to end
+raw_nvar <- raw_end - raw_start + 1
+
+# "exposure" (adjusted region volume)
+adjusted_start <- grep("left_anterior_hippocampus_adjusted", colnames(cases_df))
+adjusted_end <- grep("right_ot_sul_adjusted", colnames(cases_df))
+adjusted_nvar <- adjusted_end - adjusted_start + 1
+
+# shift within df 
+shift_index <- adjusted_start - raw_start
+out_shift <- raw_start - 1
+  
+# modify cases_df
+cases_df %<>%
+  mutate(ad_present = recode(ad_present, `LBD-AD` = "0", `LBD+AD` = "1", Control = NULL)) %>% 
+  mutate(ad_present = as.logical(as.numeric(as.character(ad_present))))
+
+
+#For loop
+dat <- cases_df
+out_mod <- vector('list', length(raw_nvar))
+i <- raw_start
+
+for (i in raw_start:raw_end){
+  raw_volume = colnames(dat)[i]
+  adjusted_volume = colnames(dat)[i+shift_index]
+  
+mod_1 <- lm(get(raw_volume) ~ ad_present + get(adjusted_volume),
+      na.action = na.exclude,
+      data=dat)
+
+
+#Add new row for each brain region with output from model
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+
+}
+ 
+library(broom)
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(conf.high) %>% 
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>% 
+  select(Region = "region", `Estimate` = "estimate", 
+         `S.E.` = "std.error", p = "p.value", `2.5% CI` = "conf.low", 
+         `97.5% CI` = "conf.high")
+
+library(kableExtra)
+table <- knitr::kable(df1, digits = 4,
+  caption = 'Models of Adjusted Subfield Volumes for +AD')
+
+kable_classic_2(table)
+
+
+```
+
+
+
 
 # Matching cases and controls
 
@@ -817,16 +677,16 @@ Values of standardized mean differences and eCDF statistics close to zero and va
 
 ```{r}
 #remove missing covariates for MatchIt
-d_for_matchit <- clean_raw %>% 
-  filter(is.na(Education)==F) %>% 
-  mutate(case_status = ifelse(case_status == "case", 1, 0))
+d_for_matchit <- ds %>% 
+  filter(is.na(education)==F) %>% 
+  mutate(case_status = ifelse(diagnosis == "Normal", 0, 1))
 
 m.out0 <- matchit(case_status ~ 
                     age_at_mri +
-                    Sex +
-                    left_ICV +
+                    sex +
+                    left_icv +
                     session_year +  #add recruitment location here 
-                    Education,
+                    education,
                   data = d_for_matchit,
                  method = NULL, distance = "glm")
 
@@ -837,13 +697,13 @@ summary(m.out0)
 
 ## 1:1 NN PS matching w/o replacement
 ```{r}
-# I removed Race since there were very few in each group
+# I removed race since there were very few in each group
 m.out1 <- matchit(case_status ~ 
                     age_at_mri +
-                    Sex +
-                    left_ICV + #add recruitment location here 
+                    sex +
+                    left_icv + #add recruitment location here 
                     session_year +
-                    Education,
+                    education,
                   data = d_for_matchit,
                  method = "nearest", distance = "glm")
 
@@ -862,7 +722,7 @@ To assess the quality of the resulting matches numerically, we can use the summa
 summary(m.out1, un = TRUE)
 
 ```
-Next is a table of the sample sizes before and after matching. The matching procedure left 244 control units unmatched. Ideally, unmatched units would be those far from the treated units and would require greater extrapolation were they to have been retained. We can visualize the distribution of propensity scores of those who were matched using plot() with type = "jitter":
+Next is a table of the sample sizes before and after matching. The matching procedure left a certain number of control units unmatched. Ideally, unmatched units would be those far from the treated units and would require greater extrapolation were they to have been retained. We can visualize the distribution of propensity scores of those who were matched using plot() with type = "jitter":
 
 ```{r}
 plot(m.out1, type = "jitter", interactive = FALSE)
@@ -870,15 +730,15 @@ plot(m.out1, type = "jitter", interactive = FALSE)
 We can visually examine balance on the covariates using plot() with type = "qq":
 ```{r}
 plot(m.out1, type = "qq", interactive = FALSE,
-     which.xs = c("age_at_mri", "Sex", "left_ICV"))
+     which.xs = c("age_at_mri", "sex", "left_icv"))
 
 #eCDF plot
 plot(m.out1, type = "ecdf", interactive = FALSE,
-     which.xs = c("age_at_mri", "Sex", "left_ICV"))
+     which.xs = c("age_at_mri", "sex", "left_icv"))
 
 #density plot
 plot(m.out1, type = "density", interactive = FALSE,
-     which.xs = c("age_at_mri", "Sex", "left_ICV"))
+     which.xs = c("age_at_mri", "sex", "left_icv"))
 
 ```
 Points far from the solid diagonal line are the areas of the covariate distributions that differ between the treatment groups. 
@@ -887,10 +747,10 @@ Points far from the solid diagonal line are the areas of the covariate distribut
 
 s.out <- matchit(case_status ~ 
                     age_at_mri +
-                    Sex +
-                    left_ICV +
+                    sex +
+                    left_icv +
                     session_year +
-                    Education,
+                    education,
                   data = d_for_matchit,
                  method = "subclass", subclass = 4)
 
@@ -904,7 +764,7 @@ s <- summary(s.out, subclass = TRUE)
 plot(s, var.order = "unmatched", abs = FALSE)
 
 
-plot(s.out, type = "density", which.xs = c("age_at_mri", "Sex", "left_ICV"),
+plot(s.out, type = "density", which.xs = c("age_at_mri", "sex", "left_icv"),
      subclass = 4)
 ```
 
@@ -915,10 +775,10 @@ library(cobalt)
 # Full matching on a probit PS
 m.out2 <- matchit(case_status ~ 
                     age_at_mri +
-                    Sex +
-                    left_ICV + #add recruitment location here 
+                    sex +
+                    left_icv + #add recruitment location here 
                     session_year +
-                    Education,
+                    education,
                   data = d_for_matchit,
                  method = "full", distance = "glm", link = "probit")
 m.out2
@@ -935,15 +795,15 @@ plot(summary(m.out1))
 
 
 plot(m.out2, type = "qq", interactive = FALSE,
-     which.xs = c("age_at_mri", "Sex", "left_ICV"))
+     which.xs = c("age_at_mri", "sex", "left_icv"))
 
 #eCDF plot
 plot(m.out2, type = "ecdf", interactive = FALSE,
-     which.xs = c("age_at_mri", "Sex", "left_ICV"))
+     which.xs = c("age_at_mri", "sex", "left_icv"))
 
 #density plot
 plot(m.out2, type = "density", interactive = FALSE,
-     which.xs = c("age_at_mri", "Sex", "left_ICV"))
+     which.xs = c("age_at_mri", "sex", "left_icv"))
 
 ```
 
@@ -963,7 +823,7 @@ We can then estimate a treatment effect in this dataset using the standard regre
 library("lmtest") #coeftest
 library("sandwich") #vcovCL
 
-fit1 <- lm(left_Anterior_hippocampus ~ case_status,
+fit1 <- lm(left_anterior_hippocampus ~ case_status,
            data = md, 
            weights = weights)
 
@@ -983,21 +843,21 @@ In order to interpret the coefficient on treatment as a marginal effect estimate
 #with treatment-covariate interactions
 
 #Create a new dataset for centered variables
-md_cen <- splitfactor(md, "Sex")
+md_cen <- splitfactor(md, "sex")
 
-covs_to_center <- c("Sex_Male", "age_at_mri",
-                    "left_ICV", #add recruitment location here 
+covs_to_center <- c("sex_Male", "age_at_mri",
+                    "left_icv", #add recruitment location here 
                     "session_year",
-                    "Education")
+                    "education")
 md_cen[covs_to_center] <- scale(md_cen[covs_to_center], 
                                 scale = FALSE)
 
 #Fit the model with every covariate interacting with treatment
-fit2 <- lm(left_Anterior_hippocampus ~ case_status * (age_at_mri +
-                    Sex_Male +
-                    left_ICV +  #add recruitment location here 
+fit2 <- lm(left_anterior_hippocampus ~ case_status * (age_at_mri +
+                    sex_Male +
+                    left_icv +  #add recruitment location here 
                     session_year +
-                    Education),
+                    education),
            data = md_cen, weights = weights)
 
 #Only output the intercept and coefficient on treatment
@@ -1009,11 +869,11 @@ To create adjusted subregion volumes, use matched controls' volumes to predict c
 ```{r adjusted vols for all regions}
 
 #Create a new dataset for centered variables
-md_cen <- splitfactor(md, "Sex")
+md_cen <- splitfactor(md, "sex")
 
-#main "treatment" effect is ICV ("left_ICV"), so center everything else
+#main "treatment" effect is icv ("left_icv"), so center everything else
 
-covs_to_center <- c("Sex_Male", "age_at_mri") #consider adding recruitment location here
+covs_to_center <- c("sex_Male", "age_at_mri") #consider adding recruitment location here
 
 md_cen[covs_to_center] <- scale(md_cen[covs_to_center], 
                                 scale = FALSE)
@@ -1028,7 +888,7 @@ out <- vector('list', length(regions))
   
 
 for (i in seq_along(regions)) {
-out[[i]] <- lm(paste(regions[i], '~', 'left_ICV * (Sex_Male + age_at_mri)'), data=ctrl_df, weights = weights)
+out[[i]] <- lm(paste(regions[i], '~', 'left_icv * (sex_Male + age_at_mri)'), data=ctrl_df, weights = weights)
 
 ctrl_df[ , ncol(ctrl_df) + 1] <- predict(out[[i]], newdata=ctrl_df)
 
@@ -1045,15 +905,15 @@ d2 <- rbind(ctrl_df, cases_df)
 d2$ad_present[d2$diagnosis =="Normal"] <- "Normal"
 
 #Example correlation for L anterior hippocampus
-ggscatter(ctrl_df, x = "left_Anterior_hippocampus", y = "left_Anterior_hippocampus_adjusted", 
+ggscatter(ctrl_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted", 
           add = "reg.line", conf.int = TRUE, 
           cor.coef = TRUE, cor.method = "pearson",
-          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L Anterior Hippocampus Volume (Controls)")
+          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Controls)")
 
-ggscatter(cases_df, x = "left_Anterior_hippocampus", y = "left_Anterior_hippocampus_adjusted", 
+ggscatter(cases_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted", 
           add = "reg.line", conf.int = TRUE, 
           cor.coef = TRUE, cor.method = "pearson",
-          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L Anterior Hippocampus Volume (Cases)")
+          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Cases)")
 
 remove(d)
 ```
@@ -1073,14 +933,14 @@ d2 %>% select(INDDID, ad_present, ends_with("_adjusted")) %>%
 #boxplot for all regions
 df <- d2 %>% select(INDDID, ad_present, ends_with("_adjusted")) %>% 
   select(-contains(c("MISC", "Meninges"))) %>% 
-  select(left_Anterior_hippocampus_adjusted, right_Anterior_hippocampus_adjusted, left_Posterior_hippocampus_adjusted, right_Posterior_hippocampus_adjusted, ad_present, 
+  select(left_anterior_hippocampus_adjusted, right_anterior_hippocampus_adjusted, left_Posterior_hippocampus_adjusted, right_Posterior_hippocampus_adjusted, ad_present, 
 left_Br36_adjusted, right_Br36_adjusted, right_PHC_adjusted, left_PHC_adjusted, left_Br35_adjusted, left_ERC_adjusted, right_ERC_adjusted, right_Br35_adjusted, INDDID) %>% 
   pivot_longer(cols = ends_with("_adjusted"), names_to = "Region", values_to = "Volume") %>% 
   mutate(ad_present = as.factor(ad_present))
 
 df$Region <- recode_factor(df$Region, 
-                           left_Anterior_hippocampus_adjusted = "L Ant Hip",
-                           right_Anterior_hippocampus_adjusted = "R Ant Hip",
+                           left_anterior_hippocampus_adjusted = "L Ant Hip",
+                           right_anterior_hippocampus_adjusted = "R Ant Hip",
                            left_Posterior_hippocampus_adjusted = "L Post Hip", 
                            right_Posterior_hippocampus_adjusted = "R Post Hip",
                            left_Br36_adjusted = "L Br36",
@@ -1102,7 +962,7 @@ ggplot(df, aes(x = ad_present, y = Volume)) +
   geom_boxplot() + 
   facet_wrap(.~Region, scales = "free") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "Subregion Volumes Adjusted for Age, Sex, and ICV", 
+  labs(title = "Subregion Volumes Adjusted for Age, sex, and icv", 
        y = "Volume (cm^3)",
        x = "Case Status") +
   font("y", size = 15) +
@@ -1119,13 +979,13 @@ ggplot(df, aes(x = ad_present, y = Volume)) +
 df_tbl1 <- 
   md %>% 
   left_join(demographics) %>% 
-  select(INDDID, diagnosis, case_status, ad_marker, intvl_marker, ad_present, session_year, Sex, Race, YOB, Education, Deceased) %>% 
+  select(INDDID, diagnosis, case_status, ad_marker, intvl_marker, ad_present, session_year, sex, race, YOB, education, Deceased) %>% 
   group_by(INDDID) %>% 
   mutate(ad_present = ad_present[!is.na(ad_present)][1L]) %>% 
   distinct() %>% 
   ungroup() %>% 
-  filter(is.na(Education)==F) %>% 
-  filter(Education > 1)
+  filter(is.na(education)==F) %>% 
+  filter(education > 1)
 
 
 df_tbl1$age_at_mri <- df_tbl1$session_year - df_tbl1$YOB
@@ -1138,9 +998,9 @@ label(df_tbl1$session_year) <- "Year of MRI"
 label(df_tbl1$ad_present) <- "AD+"
 label(df_tbl1$diagnosis) <- "Clinical Diagnosis"
 label(df_tbl1$age_at_mri) <- "Age"
-label(df_tbl1$Sex) <- "Sex at Birth"
+label(df_tbl1$sex) <- "sex at Birth"
 
-units(df_tbl1$Education) <- "years"
+units(df_tbl1$education) <- "years"
 units(df_tbl1$intvl_marker) <- "years"
   
 #reorder levels for table display
@@ -1150,10 +1010,10 @@ df_tbl1$diagnosis <- factor(df_tbl1$diagnosis,
 df_tbl1$ad_marker <- factor(df_tbl1$ad_marker, 
                                  levels = c(Autopsy = "autopsy", PET = "pet", CSF ="csf"))
 
-df_tbl1$Race <- fct_collapse(df_tbl1$Race, White = "White", `Non-White or Unknown` = c("More than One Race", "Black or African American",
+df_tbl1$race <- fct_collapse(df_tbl1$race, White = "White", `Non-White or Unknown` = c("More than One race", "Black or African American",
                                                                        "Asian", "Unknown or Not Reported"))
 
-df_tbl1$Race <- factor(df_tbl1$Race, levels = c("White", "Non-White or Unknown"))
+df_tbl1$race <- factor(df_tbl1$race, levels = c("White", "Non-White or Unknown"))
 
 df_tbl1$ad_present[df_tbl1$diagnosis=="Normal"] <- "Normal"
 
@@ -1161,7 +1021,7 @@ df_tbl1$ad_present <- factor(df_tbl1$ad_present,
                              levels = c("Normal", "FALSE", "TRUE"), 
                              labels = c("Control", "LBD-AD", "LBD+AD"))
  
-table1(~ age_at_mri + Sex + Race + Education + diagnosis| ad_present, data = df_tbl1, topclass="Rtable1-grid")
+table1(~ age_at_mri + sex + race + education + diagnosis| ad_present, data = df_tbl1, topclass="Rtable1-grid")
 
 df_tbl1_marker <- df_tbl1 %>% 
   filter(diagnosis!="Normal")
@@ -1169,103 +1029,5 @@ df_tbl1_marker <- df_tbl1 %>%
 
 
 
-table1(~ Sex + Race + age_at_mri + diagnosis + ad_marker + Education + Deceased | ad_present, data = df_tbl1_marker)
-```
-
-
-## Multiple Linear Regression with Adjusted Volumes
-```{r Multiple Linear Regression, echo=TRUE}
-# Is AD case status a predictor of volume  
-
-# Position of variables in data frame to be used in for loop
-# region raw volume
-raw_start <- grep("left_Anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars
-raw_end <- grep("right_OTSul$", colnames(cases_df)) #column index to end
-raw_nvar <- raw_end - raw_start + 1
-
-# "exposure" (adjusted region volume)
-adjusted_start <- grep("left_Anterior_hippocampus_adjusted", colnames(cases_df))
-adjusted_end <- grep("right_OTSul_adjusted", colnames(cases_df))
-adjusted_nvar <- adjusted_end - adjusted_start + 1
-
-# shift within df 
-shift_index <- adjusted_start - raw_start
-out_shift <- raw_start - 1
-  
-# create cases_df
-cases_df <- d2 %>%  select(-contains(c("MISC", "Meninges"))) %>% filter(diagnosis != "Normal") %>% 
-  mutate(ad_present = as.logical(ad_present))
-
-
-#For loop
-dat <- cases_df
-out <- vector('list', length(raw_nvar))
-out_mod <- vector('list', length(raw_nvar))
-i <- raw_start
-
-for (i in raw_start:raw_end){
-  raw_volume = colnames(dat)[i]
-  adjusted_volume = colnames(dat)[i+shift_index]
-  
-mod_1 <- lm(get(raw_volume) ~ ad_present + get(adjusted_volume) + diagnosis,
-      na.action = na.exclude,
-      data=dat)
-
-labels <- list(`get(adjusted_volume)` ~ paste(colnames(dat)[i]))
-out[[i-out_shift]] <- tbl_regression(mod_1, label = labels)
-names(out)[i-out_shift] <- paste0("model_", colnames(dat)[i])
-
-out_mod[[i-out_shift]] <- mod_1
-names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
-
-#Add new row for each brain region with output from model
-
-}
-
-
-library(broom)
-
-out_mod_summary <- summary(out_mod[[1]])
-out_mod_summary$coefficients %>% as_tibble()
-z <- tidy(mod_1, conf.int =T)[2,]
-z %>% mutate(region = names(out_mod[1]))
-
-tidy(out_mod[[1]])
-
-names(out_mod[1])
-
-df <- NULL
-
-for (i in 1:length(out_mod)) {
-z <- tidy(out_mod[[i]], conf.int =T)[2,]
-z <- z %>% mutate(region = names(out_mod[i]))
-df <- rbind(df, z)
-}
-
-df1 <- df %>% filter(region != "model_right_OTSul",
-                     region != "model_left_OTSul",
-                     region != "model_right_ColSul",
-                     region != "model_left_ColSul") %>% arrange(conf.high) %>% 
-  mutate(region = str_remove(region, "model_"),
-         region = str_replace(region, "_", " ")) %>% 
-  select(Region = "region", `Estimate` = "estimate", `S.E.` = "std.error", p = "p.value", `2.5% CI` = "conf.low", 
-         `97.5% CI` = "conf.high")
-
-library(kableExtra)
-table <- knitr::kable(df1, digits = 4,
-  caption = 'Models of Adjusted Subfield Volumes for +AD')
-
-kable_classic_2(table)
-
-```
-
-
-```{r correlation of VLT with subfield volumes}
-
-df <- d %>% filter(diagnosis != "Normal") %>%
-  right_join(hvlt_normed) %>% group_by(INDDID) %>% filter(duplicated(INDDID)|n()==1) %>% ungroup() %>% 
-  remov
-
-cor(df$)
- 
+table1(~ sex + race + age_at_mri + diagnosis + ad_marker + education + Deceased | ad_present, data = df_tbl1_marker)
 ```

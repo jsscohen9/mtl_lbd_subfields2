@@ -167,7 +167,7 @@ moca <- readxl::read_excel(here("data/moca_(2022.10.26 16.08).xlsx")) %>%
 vlt <- readxl::read_excel(here("data/vlt_(2022.11.08 09.42).xlsx")) %>% 
   mutate(INDDID = as.character(INDDID))
 
-saveRDS(vlt, file = here("vlt_raw.RDS"))
+saveRDS(vlt, file = here("objects/vlt_raw.RDS"))
 
 epworth <- readxl::read_excel(here("data/epworth_(2022.10.04 17.59).xlsx")) %>% 
   mutate(INDDID = as.character(INDDID))
@@ -418,7 +418,8 @@ mri_controls3 <- mri_controls2 %>% group_by(INDDID) %>%
   slice_max(session_date, n=1, with_ties = FALSE)
 
 #merge df of selected mri dates for cases and controls
-mri_selected_all <- mri_cases %>% select(-c(ad_marker)) %>% rbind(., mri_controls3)
+mri_selected_all <- mri_cases %>% select(-c(ad_marker)) %>% rbind(., mri_controls3) %>% 
+  filter(YOB<1963) #remove individuals less than 60 
 
 saveRDS(mri_selected_all, output)
 
@@ -437,6 +438,26 @@ output <- here("objects/mri_selected_ashs_all.RDS")
 
 # merge selected mris with ashs output
 mri_selected_ashs_all <- mri_selected_all %>% left_join(ashs_wide)
+
+# add age at MRI variable
+# extract session date
+mri_selected_ashs_all$session_year <- stringr::str_sub(mri_selected_ashs_all$session_date, start = 1, end = 4)
+
+mri_selected_ashs_all$age_at_mri <- as.numeric(
+  lubridate::parse_date_time(
+    mri_selected_ashs_all$session_year, "Y") - 
+    lubridate::parse_date_time(mri_selected_ashs_all$YOB, "Y")) / 365 
+
+mri_selected_ashs_all$age_at_mri <- round(mri_selected_ashs_all$age_at_mri, digits = 0) 
+
+# set ad_present = "Normal" in controls 
+mri_selected_ashs_all$ad_present %<>%  as.character()
+mri_selected_ashs_all$ad_present[mri_selected_ashs_all$diagnosis ==
+                                   "Normal"] <- "Normal"
+mri_selected_ashs_all$ad_present <- factor(
+  mri_selected_ashs_all$ad_present, 
+  levels = c("Normal", "FALSE", "TRUE"),
+  labels = c("Control", "LBD-AD", "LBD+AD"))
 
 saveRDS(mri_selected_ashs_all, output)
 
