@@ -1,0 +1,652 @@
+---
+title: "batch effects"
+author: "Jesse Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(here)
+library(ROCR)
+library(caret)
+library(devtools)
+install_github("jfortin1/neuroCombat_Rpackage")
+library(neuroCombat)
+devtools::install_github("andy1764/CovBat_Harmonization/R")
+library(CovBat)
+library(magrittr)
+library(janitor)
+library(gt)
+library(plotly)
+```
+
+
+```{r Data Import Template, echo=FALSE, results='hide'}
+# input
+mri_bids_data_t1 <- read_rds(here("objects/mri_bids_data_t1.RDS"))
+ashs_clean <- read_rds("objects/ashs_clean.RDS")
+
+# Initialise the dataset as per the template.
+dsname <- "mri_bids_data_t1"
+ds     <- get(dsname)
+
+ds %>% sample_frac()
+
+glimpse(ds)
+```
+
+
+```{r Normalize variable names automatically, results='hide', echo=FALSE}
+# Normalise the variable names.
+
+ds %<>% clean_names(numerals="right")
+
+# Confirm the results are as expected.
+
+names(ds)
+
+# Note the available variables.
+
+vars <- names(ds)
+
+```
+
+```{r , results='hide', echo=FALSE}
+# Note the identifiers.
+
+id <- c("inddid", "flywheel_session_label", "bids_filename")
+
+# Initialise ignored variables: identifiers.
+
+ignore <- c(id)
+
+```
+
+```{r , results='hide', echo=FALSE}
+#Once we have identified all of the variables to ignore we remove them from our list of variables to use.
+
+# Check the number of variables currently.
+
+length(vars)
+
+# Remove the variables to ignore.
+
+vars <- setdiff(vars, ignore)
+
+# Confirm they are now ignored.
+
+length(vars)
+```
+
+```{r Character variables, results='hide', echo=FALSE }
+# Identify the character variables by index.
+
+ds[vars] %>%
+  sapply(is.character) %>%
+  which()  ->
+chari
+
+# Identify the character variables by name.
+
+ds[vars] %>% 
+  names() %>% 
+  '['(chari) ->
+charc
+
+# Observe the unique levels.
+
+ds[charc] %>% sapply(unique) 
+
+# # Which columns have > 5 unique levels?
+# charc_long <- 
+#   ds[charc][sapply(ds[charc], function(x) length(unique(x)) > 5)] %>% 
+#   colnames()
+# 
+# # Ignore character variables with too many levels
+# 
+# ignore <- union(ignore, charc_long)
+
+```
+
+```{r Numeric Variables ,results='hide', echo=FALSE}
+ds[vars] %>%
+  sapply(is.numeric) %>%
+  which() %>%
+  names ->
+numi
+
+ds[numi] %>% 
+  summary()
+```
+
+```{r remove columns from ds before joining, results='hide', echo=FALSE}
+ds %<>% select(inddid, flywheel_session_label, contains("dicom")) %>% distinct()
+```
+
+```{r join ashs with bids}
+ds1 <-
+  ashs_clean %>% 
+  left_join(ds) %>% 
+  distinct() 
+
+ds1 
+
+# Convert bids/dicom numerical variables to factors
+ds1[numi] <- round(ds1[numi])
+
+ds1[numi] <- sapply(ds1[numi], as.factor)
+
+# filter out duplicates - need to check to make sure this isn't causing the problem 
+ds1  %<>% filter(dicom_slice_thickness == 1 &
+                  dicom_spacing_between_slices !=8) %>% 
+  distinct()
+
+ds1
+```
+
+```{r simplify factors for batch correction}
+# character variables
+fct_count(ds1$dicom_station_name) %>% arrange(desc(n))
+ds1$dicom_station_name <-
+ds1$dicom_station_name %>%
+  replace_na("other") %>% 
+  as.factor() %>% 
+  fct_collapse(
+    hup6 = c("hup6", "HUP FNDBA MR2", "MRC35154", "MRC20523"),
+    dr1 = c("dr1", "HUP DEVGR MR1", "c93verio", "hup devon mrd1",
+            "MRC21236", "other")
+  )
+  
+# fct_count(ds1$dicom_institution_name) %>% arrange(desc(n))
+```
+
+```{r collapse factors, results='hide', echo=FALSE}
+# Slice thickness
+fct_count(ds1$dicom_slice_thickness)
+ds1$dicom_slice_thickness <- fct_collapse(
+  ds1$dicom_slice_thickness, 
+  `1` = c("1", "2"),
+  `4` = c("4", "5"))
+fct_count(ds1$dicom_slice_thickness)
+
+# Pixel spacing
+fct_count(ds1$dicom_pixel_spacing_x)
+ds1$dicom_pixel_spacing_x <- fct_collapse(
+  ds1$dicom_pixel_spacing_x, 
+  `1` = c("0", "1"))
+fct_count(ds1$dicom_pixel_spacing_x)
+
+# Field strength
+fct_count(ds1$dicom_magnetic_field_strength)
+ds1$dicom_magnetic_field_strength <- fct_collapse(
+  ds1$dicom_magnetic_field_strength, 
+  `1.5` = c("1", "15000"),
+  `3` = c("2", "3"))
+fct_count(ds1$dicom_magnetic_field_strength)
+
+# Repetition 
+fct_count(ds1$dicom_repetition_time)
+ds1$dicom_repetition_time <- fct_collapse(
+  ds1$dicom_repetition_time, 
+  `10` = c("10", "11", "440", "700"),
+  `1620` = c("1140", "1620", "1800", "1900", "2300", "2400", "3000"))
+fct_count(ds1$dicom_repetition_time)
+
+# Spacing between slices
+fct_count(ds1$dicom_spacing_between_slices)
+ds1$dicom_spacing_between_slices <- fct_collapse(
+  ds1$dicom_spacing_between_slices, 
+  `8` = c("5", "6", "8"))
+fct_count(ds1$dicom_spacing_between_slices)
+
+# Remove any remaining duplicates after collapsing factors
+ds1 %<>% distinct()
+ds1 %>% filter(duplicated(inddid))
+
+```
+
+
+
+I need to see which files ashs was run with to make sure the other slice thickness with the same session label wasn't used for ashs
+
+```{r Data Exploration, results = TRUE}
+#A random sample of the dataset:
+
+# ds1 %>% sample_frac()
+# 
+# ds1 %>% count(flywheel_session_label) %>% dplyr::arrange(desc(n))
+```
+
+
+```{r script from Taki}
+
+####################################
+### TRY WITH RAW DATA - PREDICTING STATION NAME
+mtl_nums <- 
+  ds1 %>% 
+  select((contains("left_") | 
+            contains("right_")) &
+           -contains("sul"))
+
+y_raw <- mtl_nums
+y_raw$y <- as.factor(ds1$dicom_station_name=="hup6")
+set.seed(9458)
+inTraining <- createDataPartition(y_raw$y, p = .5, list = FALSE)
+training <- y_raw[ inTraining,]
+testing  <- y_raw[-inTraining,]
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10, repeats = 1)
+Fit1 <- train(y ~ .,
+              method = "rf", data=training,
+              trControl = fitControl)
+
+test_prob <- predict(Fit1, testing,type='prob')[,2]
+pred <- prediction(test_prob, testing$y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc1<-performance(pred, measure = "auc")@y.values[[1]]
+print(auc1)
+plot(perf)
+
+####################################
+### TRY WITH RAW DATA - PREDICTING DX
+y_raw$y<-factor(ds1$diagnosis=='Normal')
+set.seed(9458)
+inTraining <- createDataPartition(y_raw$y, p = .5, list = FALSE)
+training <- y_raw[ inTraining,]
+testing  <- y_raw[-inTraining,]
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10,repeats = 1)
+Fit1 <- train(y ~ .,
+              method = "rf", data=training,
+              trControl = fitControl)
+
+test_prob <- predict(Fit1, testing,type='prob')[,2]
+pred <- prediction(test_prob, testing$y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc1<-performance(pred, measure = "auc")@y.values[[1]]
+auc1_diagnosis_raw <- print(auc1)
+roc_diagnosis_raw <- plot(perf, col=rainbow(10)) 
+```
+
+```{r}
+### TRY WITH COMBAT DATA
+age <- ds1$age_at_mri
+disease <- as.factor(ds1$diagnosis != "Normal")
+sex <- ds1$sex
+education <- ds1$education
+
+y_combat <- data.frame(t(neuroCombat(t(mtl_nums), 
+                                     bat = as.numeric(factor(ds1$dicom_station_name)), 
+                                     mod = model.matrix(~ age + sex + disease +
+                                                          education,
+                                                        data = ds1))$dat.combat))
+
+####################################
+### TRY WITH COMBAT DATA - PREDICTING DICOM STATION NAME
+y_combat$y<-factor(ds1$dicom_station_name=='hup6')
+set.seed(9458)
+inTraining <- createDataPartition(y_combat$y, p = .5, list = FALSE)
+training <- y_combat[ inTraining,]
+testing  <- y_combat[-inTraining,]
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10, repeats = 1)
+Fit1 <- train(y ~ .,
+              method = "rf", data=training,
+              trControl = fitControl)
+test_prob <- predict(Fit1, testing,type='prob')[,2]
+pred <- prediction(test_prob, testing$y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc1<-performance(pred, measure = "auc")@y.values[[1]]
+print(auc1)
+plot(perf, col=rainbow(10))
+
+####################################
+### TRY WITH COMBAT DATA - PREDICTING DX
+y_combat$y<-factor(ds1$diagnosis=='Normal')
+set.seed(9458)
+inTraining <- createDataPartition(y_combat$y, p = .5, list = FALSE)
+training <- y_combat[ inTraining,]
+testing  <- y_combat[-inTraining,]
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10, repeats = 1)
+Fit1 <- train(y ~ .,
+              method = "rf", data=training,
+              trControl = fitControl)
+test_prob <- predict(Fit1, testing,type='prob')[,2]
+pred <- prediction(test_prob, testing$y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc1<-performance(pred, measure = "auc")@y.values[[1]]
+print(auc1)
+plot(perf, col=rainbow(10))
+
+```
+### TRY WITH COMBAT DATA- FORGET DX ADJUSTMENT
+This should make it harder to accurately predict the station name, 
+but also will washout disease effects making it harder to predict disease
+```{r}
+y_combat <- data.frame(t(neuroCombat(t(mtl_nums), bat = as.numeric(factor(ds1$dicom_station_name)))$dat.combat))
+```
+
+### TRY WITH COMBAT DATA - PREDICTING DICOM STATION NAME
+```{r}
+y_combat$y<-factor(ds1$dicom_station_name=='hup6')
+set.seed(9458)
+inTraining <- createDataPartition(y_combat$y, p = .5, list = FALSE)
+training <- y_combat[ inTraining,]
+testing  <- y_combat[-inTraining,]
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10, repeats = 1)
+Fit1 <- train(y ~ .,
+              method = "rf", data=training,
+              trControl = fitControl)
+test_prob <- predict(Fit1, testing,type='prob')[,2]
+pred <- prediction(test_prob, testing$y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc1<-performance(pred, measure = "auc")@y.values[[1]]
+print(auc1)
+plot(perf, col=rainbow(10))
+
+####################################
+### TRY WITH COMBAT DATA - PREDICTING DX
+y_combat$y<-factor(ds1$diagnosis=='Normal')
+set.seed(9458)
+inTraining <- createDataPartition(y_combat$y, p = .5, list = FALSE)
+training <- y_combat[ inTraining,]
+testing  <- y_combat[-inTraining,]
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10, repeats = 1)
+Fit1 <- train(y ~ .,
+              method = "rf", data=training,
+              trControl = fitControl)
+test_prob <- predict(Fit1, testing,type='prob')[,2]
+pred <- prediction(test_prob, testing$y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc1<-performance(pred, measure = "auc")@y.values[[1]]
+print(auc1)
+plot(perf, col=rainbow(10))
+
+```
+
+```{r}
+### TRY WITH COVBAT DATA
+y_covbat <- data.frame(t(covbat(t(mtl_nums), bat = as.numeric(factor(ds1$dicom_station_name)),
+                                mod = model.matrix(~ age + sex + disease + education,
+                                                   data = ds1))$dat.covbat))
+
+####################################
+### TRY WITH COVBAT DATA - PREDICTING DICOM STATION NAME
+y_covbat$y<-factor(ds1$dicom_station_name=='hup6')
+set.seed(9458)
+inTraining <- createDataPartition(y_covbat$y, p = .5, list = FALSE)
+training <- y_covbat[ inTraining,]
+testing  <- y_covbat[-inTraining,]
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10, repeats = 1)
+Fit1 <- train(y ~ .,
+              method = "rf", data=training,
+              trControl = fitControl)
+test_prob <- predict(Fit1, testing,type='prob')[,2]
+pred <- prediction(test_prob, testing$y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc1<-performance(pred, measure = "auc")@y.values[[1]]
+print(auc1)
+plot(perf)
+
+####################################
+### TRY WITH COVBAT DATA - PREDICTING DX
+y_covbat$y<-factor(ds1$diagnosis=='Normal')
+set.seed(9458)
+inTraining <- createDataPartition(y_covbat$y, p = .5, list = FALSE)
+training <- y_covbat[ inTraining,]
+testing  <- y_covbat[-inTraining,]
+fitControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10, repeats = 1)
+Fit1 <- train(y ~ .,
+              method = "rf", data=training,
+              trControl = fitControl)
+test_prob <- predict(Fit1, testing,type='prob')[,2]
+pred <- prediction(test_prob, testing$y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc1<-performance(pred, measure = "auc")@y.values[[1]]
+print(auc1)
+plot(perf)
+
+```
+
+<!-- # Combat -->
+
+<!-- ## **1. Multi-Site Harmonization** -->
+
+<!-- ComBat estimates scanner-specific location and scale parameters, for each feature separately, and pools information across features using empirical Bayes to improve the estimation of those parameters for small sample size studies. -->
+
+<!-- ### **1.1 Full ComBat with empirical Bayes** -->
+
+<!-- The `neuroCombat` function is the main function. It requires two mandatory arguments: - a data matrix (p x n) `dat` for which the p rows are features, and the n columns are participants. - a numeric or character vector `batch` of length n indicating the site/scanner/study id. -->
+
+<!-- For illustration purpose, let's simulate an imaging dataset with n=10 participants, acquired on 2 scanners, with 5 participants each, with p=10000 voxels per scan. -->
+
+<!-- ```{r} -->
+<!-- library(neuroCombat) -->
+<!-- p=10000 -->
+<!-- n=10 -->
+<!-- batch = c(1,1,1,1,1,2,2,2,2,2) #Batch variable for the scanner id -->
+<!-- dat = matrix(runif(p*n), p, n) #Random Data matrix -->
+
+<!-- # Extract batch variable -->
+<!-- batch <- as.factor(ds1$dicom_station_name) -->
+
+<!-- # Remove ids from ds1  -->
+
+<!-- ignore <- c("inddid",  -->
+<!--             "diagnosis", -->
+<!--             "ad_present", -->
+<!--             "session_date", -->
+<!--             "flywheel_session_label", -->
+<!--             "yob", -->
+<!--             "race", -->
+<!--             "session_year", -->
+<!--             "dicom_station_name", -->
+<!--             "sex", -->
+<!--             "education", -->
+<!--             "age_at_mri") -->
+
+
+<!-- dat <- ds1 %>% select(-c(any_of(ignore))) %>%  -->
+<!--   as.matrix() %>% t() -->
+
+<!-- ``` -->
+
+<!-- We use the function `neuroCombat` to harmonize the data across the 2 scanners: -->
+
+<!-- ```{r} -->
+<!-- data.harmonized <- neuroCombat(dat=dat, batch=batch) -->
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- # Combine the harmonized data with the site data, covariates, IV  -->
+<!-- output <- cbind(t(data.harmonized$dat.combat), ds1[ignore]) %>%  -->
+<!--   select(ignore, everything()) %>%  -->
+<!--   as.tibble() -->
+
+<!-- ``` -->
+
+<!-- By default, this uses parametric adjustments. To following command must be used for non-parametric adjustments: -->
+
+<!-- ```{r} -->
+<!-- data.harmonized <- neuroCombat(dat=dat, batch=batch, parametric=FALSE) -->
+<!-- ``` -->
+
+<!-- The harmonized matrix is stored in `data.harmonized$dat.combat`. The `data.harmonized` object also contains the different parameters estimated by ComBat: - `gamma.hat` and `delta.hat`: Estimated location and shift (L/S) parameters before empirical Bayes. - `gamma.star` and `delta.star`: Empirical Bayes estimated L/S parameters. - `gamma.bar`, `t2`, `a.prior` and `b.prior`: esimated prior distributions parameters. -->
+
+<!-- `neuroCombat` also accepts an optional argument, `mod`, which is a matrix containing biological covariates, including the outcome of interest. This is recommended to ensure that biological variability is preserved in the harmonization process. For instance, for a study with age and disease covariates, -->
+
+<!-- ```{r} -->
+<!-- # age <- c(82,70,68,66,80,69,72,76,74,80) # Continuous variable -->
+<!-- # disease <- as.factor(c(1,2,1,2,1,2,1,2,1,2)) # Categorical variable -->
+
+<!-- age <- ds1$age_at_mri -->
+<!-- disease <- as.factor(ds1$diagnosis != "Normal") -->
+<!-- sex <- ds1$sex -->
+<!-- education <- ds1$education -->
+<!-- ``` -->
+
+<!-- we first create a model matrix for these two biological covariates using the `model.matrix` function: -->
+
+<!-- ```{r} -->
+<!-- # mod <- model.matrix(~age+disease) -->
+<!-- # mod  -->
+
+<!-- mod <- model.matrix(~ age + disease + sex + education) -->
+
+<!-- ``` -->
+
+<!-- The matrix `mod` is a n x 3 matrix, containing an intercept, age and a dummy variable for the second level of the disease variable (the first level is taken as the baseline group). Note that including an intercept in the model matrix will not change the results of the algorithm; ComBat automatically removes the intercept from the model matrix when fitting the models. We now harmonize the data: -->
+
+<!-- ```{r} -->
+<!-- combat.harmonized <- neuroCombat(dat=dat, batch=batch, mod=mod) -->
+<!-- ``` -->
+
+
+## Figure 1: Subregion Volumes, unadjusted after batch adjustment for dicom station
+```{r subregion vols raw}
+# check to make sure no shift in rows
+plot(y_covbat$left_anterior_hippocampus, ds1$left_anterior_hippocampus) #well correlated
+
+plot(y_covbat$left_anterior_hippocampus, rev(ds1$left_anterior_hippocampus)) #randomly correlated
+
+# bind y_covbat back to ds1
+ds_covbat <-
+  ds1 %>% 
+  select(-(contains("dicom") | contains("left_") |
+           contains("right_"))) %>% 
+  cbind(y_covbat) %>% 
+  select(-y) %>% 
+  as.tibble()
+
+
+#obtain order of regions by mean volume
+df_raw_vol <- ds_covbat %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>%
+  select(-contains(c("misc", "meninges", "icv", "sul"))) %>%
+  pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>%
+  mutate(ad_present = as.factor(ad_present))
+
+df_raw_vol %>%
+  group_by(Region) %>%
+  summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol))
+
+df_raw_vol$Region <- recode_factor(df_raw_vol$Region,
+                           left_anterior_hippocampus= "L Ant Hip",
+                           right_anterior_hippocampus = "R Ant Hip",
+                           left_posterior_hippocampus = "L Post Hip",
+                           right_posterior_hippocampus = "R Post Hip",
+                           left_br36 = "L Br36",
+                           right_br36 = "R Br36",
+                           left_phc = "L PHC",
+                           right_phc = "R PHC",
+                           left_br35 = "L Br35",
+                           right_br35 = "R Br35",
+                           left_erc = "L ERC",
+                           right_erc = "R ERC")
+
+df_raw_vol$ad_present <- recode_factor(df_raw_vol$ad_present,
+                               Normal = "Control",
+                               `FALSE` = "LBD-AD",
+                               `TRUE` = "LBD+AD")
+
+
+plot <-
+  ggplot(df_raw_vol, aes(x = ad_present, y = Volume)) +
+  geom_boxplot() +
+  facet_wrap(.~Region, scales = "free") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Subregion Volumes, Unadjusted (After Batch Correction)",
+       y = "Volume (cm^3)",
+       x = "Case Status") +
+  font("y", size = 15) +
+  font("x", size = 15) +
+  theme(strip.text.x = element_text(size = 7)) +
+  geom_jitter(alpha = 0.2, size =1)
+
+plot
+```
+
+
+# Regression with unadjusted volumes
+Is AD case status a predictor of volume?
+
+```{r regression using unadjusted vols, echo=TRUE}
+# Look at regression of case vs control
+ds_covbat1 <- ds_covbat %>%  select(-contains(c("misc", "meninges"))) %>%
+  mutate(case_status = ifelse(diagnosis == "Normal", 0,
+                              ifelse(diagnosis != "Normal", 1,
+                                      "NA")))
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+vol_start <- grep("left_anterior_hippocampus$", colnames(ds_covbat1)) #column index to begin taking outcome vars
+vol_end <- grep("right_phc$", colnames(ds_covbat1)) #column index to end
+vol_nvar <- vol_end - vol_start + 1
+
+# shift within df
+out_shift <- vol_start - 1
+
+#For loop
+dat <- ds_covbat1
+out_mod <- vector('list', length(vol_nvar))
+i <- vol_start
+
+for (i in vol_start:vol_end){
+  raw_volume = colnames(dat)[i]
+
+mod_1 <- lm(get(raw_volume) ~ case_status,
+      na.action = na.exclude,
+      data=dat)
+
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+}
+
+
+library(broom)
+
+out_mod_summary <- summary(out_mod[[1]])
+out_mod_summary$coefficients %>% as_tibble()
+z <- tidy(mod_1, conf.int =T)[2,]
+z %>% mutate(region = names(out_mod[1]))
+
+tidy(out_mod[[1]])
+
+names(out_mod[1])
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(estimate) %>%
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>%
+  select(Region = "region", `Estimate` = "estimate", p = "p.value")
+
+library(kableExtra)
+table <- knitr::kable(df1, digits = 4,
+  caption = 'Models of Combat Adjusted Subfield Volumes for Case vs Control')
+
+kable_classic_2(table)
+
+```

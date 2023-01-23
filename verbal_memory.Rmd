@@ -2,11 +2,21 @@
 title: "Verbal memory analysis"
 author: "Jesse Cohen"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE, fig.show = TRUE, 
+                      warning = FALSE, message = FALSE,
+                      results = FALSE, tidy = TRUE,
+                      fig.height = 8)
 
 library(here)
 library(tidyverse)
@@ -18,14 +28,15 @@ library(lobstr)       # Inspect R data structures.
 library(FSelector)    # Feature selection, information.gain().
 library(stringi)      # String concat operator %s+%.
 library(naniar)
+library(magrittr)
+library(ggpubr)
+library(heatmaply)
 
 rm(list = ls())
 ```
 
-Initialize per template
 
-# Data Import Template
-```{r initialize}
+```{r Data Import Template}
 # input
 verbal_testing_data <- read_rds(here("objects/vlt_raw.RDS"))
 ashs_clean <- read_rds("objects/ashs_clean.RDS")
@@ -39,12 +50,8 @@ ds %>% sample_frac()
 glimpse(ds)
 ```
 
-Normalize variable names automatically
-```{r}
-# Capture the original variable names for use in plots.
 
-vnames <- names(ds)
-
+```{r Normalize variable names automatically}
 # Normalise the variable names.
 
 ds %<>% clean_names(numerals="right")
@@ -53,15 +60,9 @@ ds %<>% clean_names(numerals="right")
 
 names(ds)
 
-# Index the original variable names by the new names.
-
-names(vnames) <- names(ds)
-
-vnames
-
 # Note the available variables.
 
-vars <- names(ds) %T>% print()
+vars <- names(ds)
 
 ```
 
@@ -76,28 +77,21 @@ ignore <- c(id)
 
 ```
 
-Character variables 
-```{r}
+
+```{r Character variables }
 # Identify the character variables by index.
 
 ds %>%
   sapply(is.character) %>%
-  which() %T>%
-  print() ->
+  which()  ->
 chari
 
 # Identify the character variables by name.
 
 ds %>% 
   names() %>% 
-  '['(chari) %T>% 
-  print() ->
+  '['(chari) ->
 charc
-
-# Observe the unique levels.
-
-ds[charc] %>% sapply(unique)
-
 
 # Ignore character variables
 
@@ -105,8 +99,9 @@ ignore <- union(ignore, charc)
 
 ```
 
-Once we have identified all of the variables to ignore we remove them from our list of variables to use.
 ```{r}
+#Once we have identified all of the variables to ignore we remove them from our list of variables to use.
+
 # Check the number of variables currently.
 
 length(vars)
@@ -120,30 +115,29 @@ vars <- setdiff(vars, ignore)
 length(vars)
 ```
 
-Numeric Variables
-```{r}
+```{r Numeric Variables}
 ds[vars] %>%
   sapply(is.numeric) %>%
   which() %>%
-  names %T>%
-  print() ->
+  names ->
 numi
 
 ds[numi] %>% 
   summary()
 ```
 
-# Data Exploration
 
-A random sample of the dataset:
-```{r}
+```{r Data Exploration, results = TRUE}
+#A random sample of the dataset:
+
 ds %>% sample_frac()
 ```
 
+\newpage 
 
 # Verbal memory
 Caveats with combining the two scores: as opposed to HVLT, PVLT looks at effect of distractors - after trial_ 5 adds a distractor list. Will z-score within each test within domains of learning (immediate recall), delayed recall (including "rapid forgetting index" of number on delayed recall:best immediate recall score), recognition (recognition discrimination index).
--Need to show consistent relationships between domains in HVLT vs PVLT in order to legitimize combining them 
+- Need to show consistent relationships between domains in HVLT vs PVLT in order to legitimize combining them 
 - will use score closest in time to MRI that occurs after MRI, since in mediation analysis the cognitive test has to come after the MRI  
 
 Steps:
@@ -182,10 +176,10 @@ verbal_date %<>%
 
 ```
 
+## HVLT score normalization, all available subjects/tests
+```{r , results=TRUE}
+# correlation of uncorrected volumes with HVLT scores
 
-```{r}
-#correlation of corrected volumes with HVLT scores
-# for now with uncorrected volumes
 
 # HVLT learning - Total recall score. also z-scores for each individual trial_ then average those z scores
 # delayed - including Rapid forgetting index (%retained - measures what is lost between highest score in immediate recall and delayed recall)
@@ -220,8 +214,18 @@ hvlt_normed <- data %>%
   rowwise() %>% 
   mutate(immediate_z_score_mean = mean(hvltrt_1_z_score, hvltrt_2_z_score, hvltrt_3_z_score, na.rm = T)) 
   
-### Library
-library(heatmaply)
+
+hvlt_normed %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free") + 
+    stat_boxplot(geom = "errorbar", width = 0.5) + # In separate panels
+    geom_density()              +            # boxplot
+  theme(strip.text.x = element_text(size = 6))+
+  theme(axis.text.x = element_text(size = 4)) +
+  ggtitle("All HVLT scores")
+
 
 ### Data
 df <- hvlt_normed %>% select(contains("z_score"))
@@ -237,7 +241,9 @@ hvlt_heatmap <- heatmaply_cor(x = cor(df),
 hvlt_heatmap
 ```
 
-```{r}
+
+## PVLT score normalization, all available subjects/tests
+```{r PVLT , results=TRUE}
 # PVLT
 # Subset PVLT testing
 pvlt <- ds %>% select(inddid, test_date_1, ageat_test, dplyr::all_of(dplyr::contains("phl"))) %>% 
@@ -249,14 +255,14 @@ pvlt <- ds %>% select(inddid, test_date_1, ageat_test, dplyr::all_of(dplyr::cont
 # pvlt <- pvlt %>% filter(is.na(phl_recognition_discrimin)==F)
 
 data <- pvlt %>% 
-  select(inddid, test_date_1, phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5,
+  select(inddid, test_date_1, ageat_test, phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5,
          phl_correct_15total, phl_correct_trial_9, phl_recognition_discrimin) %>% 
   filter(is.na(phl_recognition_discrimin)==F) %>% 
   rowwise() %>% 
   mutate(immediate_max = max(phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5)) %>% 
   mutate(remember_index = phl_correct_trial_9/immediate_max) 
 
-z_scores <- sapply(data[,-(1:2)], function(data) (data-mean(data))/sd(data))
+z_scores <- sapply(data[,-(1:3)], function(data) (data-mean(data))/sd(data))
   
 #rename z_score column names 
 original_cols <- colnames(z_scores) 
@@ -266,13 +272,25 @@ data <- cbind(data, z_scores)
 # 
 # #rejoin to original df
 # pvlt_normed <- verbal_date %>% filter(test == "pvlt_date") %>%
-#   left_join(., data) %>% as.tibble()
+# left_join(., data) %>% as.tibble()
 
 #create new column for mean of immediate recall z-scores
 pvlt_normed <- data %>% 
   rowwise() %>% 
   mutate(immediate_z_score_mean = mean(phl_correct_trial_1_z_score, phl_correct_trial_2_z_score, phl_correct_trial_3_z_score, phl_correct_trial_4_z_score, phl_correct_trial_5_z_score)) 
 
+
+pvlt_normed %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free") + 
+    stat_boxplot(geom = "errorbar", width = 0.5) + # In separate panels
+    geom_density()              +            # boxplot
+  theme(strip.text.x = element_text(size = 6))+
+  theme(axis.text.x = element_text(size = 4)) +
+  ggtitle( "All PVLT scores")
+  
 ### Data
 df <- pvlt_normed %>% select(contains("z_score"))
 
@@ -285,9 +303,18 @@ pvlt_heatmap <- heatmaply_cor(x = cor(df),
               main = "PVLT Z-scores")
 
 
-hvlt_heatmap
 pvlt_heatmap
 
+pvlt_normed %>% select(ageat_test,
+  p_1 = phl_correct_trial_1_z_score,
+  p_total = phl_correct_15total_z_score,
+  p_recall = remember_index_z_score,
+  p_recog = phl_recognition_discrimin_z_score) %>% 
+  correlate() %>%
+  network_plot()
+```
+
+```{r }
 # Create a heatmap of individuals with both pvlt and hvlt.
 # Select a single score for total, delay, memory, and recall
 ds_h <- hvlt_normed %>% select(inddid, test_date,
@@ -328,9 +355,8 @@ combo_heatmap <- heatmaply_cor(x = cor(df),
 combo_heatmap
 ```
 
-# correlation of PVLT with volumes
+# Correlation of PVLT with volumes
 ```{r correlation of VLT with subfield volumes}
-
 pvlt_ashs <-
   verbal_date %>% 
   filter(test == "pvlt_date") %>% 
@@ -420,7 +446,7 @@ vol_vlt_cor(p_phc)
 
 ```
 
-# Correlation with HVLT with volumes
+# Correlation of HVLT with volumes
 ```{r}
 hvlt_ashs <-
   verbal_date %>% 
@@ -497,5 +523,14 @@ vol_vlt_cor(h_hip)
 vol_vlt_cor(h_br36)
 vol_vlt_cor(h_br35)
 vol_vlt_cor(h_phc)
+```
+
+```{r explore confounders}
+summary(pvlt_ashs$age_at_mri)
+
+summary(hvlt_ashs$age_at_mri)
+
+summary(pvlt_ashs) 
+summary(hvlt_ashs)
 ```
 
