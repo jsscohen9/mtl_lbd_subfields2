@@ -1,0 +1,776 @@
+---
+title: "Hippocampal Subfield Analysis"
+author: "Jesse Cohen"
+date: "`r Sys.Date()`"
+output: ioslides_presentation
+  slide_theme: compact
+---
+
+```{r setup, include=FALSE, }
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, 
+                      fig.path = "reports/", include = FALSE)
+
+set.seed(0122023)
+
+rm(list = ls())
+```
+
+```{r packages}
+library(tidyverse)
+library(table1)
+library(gridExtra)
+library(modelr)
+library(gtsummary)
+library(hrbrthemes)
+library(viridis)
+library(ggforce)
+library(arsenal)
+library(ggpubr)
+library(MatchIt)
+library(magrittr)
+library(here)
+library(randomForest)
+library(janitor)
+library(rattle)
+library(corrr)
+library(lobstr)       # Inspect R data structures.
+library(FSelector)    # Feature selection, information.gain().
+library(stringi)      # String concat operator %s+%.
+library(DT)
+```
+
+# Data
+
+## Study design: INDD Query
+
+-   Prospectively collected clinical, biomarker and imaging data from INDD Queried INDD for individuals with at least 1 MRI available and:
+
+-   Clinical diagnosis PD, PD-MCI, PDD, or DLB or
+
+-   Or healthy control (MMSE >27 or CDR = 0, no self-history of neuropsych dz)
+
+Query resulted in:
+
+920 MRI sessions (523 unique subjects)
+
+ANTsCT cortical thickness pipeline 549 successful (312 unique subjects)
+
+<!-- # Data Import -->
+
+```{r munge}
+source(file = here("munge.R"))
+```
+
+<!-- ## Confirm AD_present is consistent for each INDDID -->
+
+<!-- ```{r confirm concordant ad_present} -->
+
+<!-- # Take biomarkers dataframe in which each row has single biomarker test for each INDDID  -->
+
+<!-- # and make table with ad present or absent for each INDDID -->
+
+<!-- df_ad_present <-  -->
+
+<!--   biomarkers %>%  -->
+
+<!--   select(INDDID, ad_present, diagnosis, ad_present, abc, PET_read, tau_abeta42_ratio, CSFDate) %>%  -->
+
+<!--   filter(is.na(ad_present)==F) %>% #remove any rows with NAs -->
+
+<!--   group_by(INDDID) %>%  -->
+
+<!--   summarise(ad_dx_unique = mean(ad_present)) #if the mean is not 0 or 1 then it has conflicting ad_present  -->
+
+<!-- #remove individuals with conflicting ad_present -->
+
+<!-- df_ad_present <- -->
+
+<!--   df_ad_present %>%  -->
+
+<!--   filter(ad_dx_unique == 0 | ad_dx_unique == 1) %>%  -->
+
+<!--   mutate(ad_present = ifelse(ad_dx_unique == 1, TRUE,  -->
+
+<!--                              ifelse(ad_dx_unique == 0, FALSE, -->
+
+<!--                                     NA))) %>%  -->
+
+<!--   select(INDDID, ad_present) -->
+
+<!-- d <- d %>% filter(INDDID %in% df_ad_present$INDDID | diagnosis == "Normal") #include only cases with clear ad_present status, as well as Normal controls -->
+
+<!-- remove(df_ad_present) -->
+
+<!-- ``` -->
+
+```{r initialize}
+# input
+mri_selected_ashs <- read_rds(here("objects/mri_selected_ashs_all.RDS"))
+
+# Initialise the dataset as per the template.
+dsname <- "mri_selected_ashs"
+ds     <- get(dsname)
+
+ds %>% sample_frac()
+```
+
+## ASHS data on cases and controls
+
+```{r , include=TRUE}
+DT::datatable(ds)
+```
+
+```{r export ids/sessions, include=FALSE}
+qc_ids <- mri_selected_ashs %>% select(subject = INDDID, 
+                                       session = FlywheelSessionLabel)
+
+write_delim(qc_ids, file = here("qc_ids.txt"))
+```
+
+```{r Normalize variable names}
+# Normalize variable names automatically
+# Capture the original variable names for use in plots.
+
+vnames <- names(ds)
+
+# Normalise the variable names.
+
+ds %<>% clean_names(numerals="right")
+
+# Confirm the results are as expected.
+
+names(ds)
+
+# Index the original variable names by the new names.
+
+names(vnames) <- names(ds)
+
+vnames
+
+# Note the available variables.
+
+vars <- names(ds) %T>% print()
+
+```
+
+```{r Character variables }
+# Identify the character variables by index.
+
+ds %>%
+  sapply(is.character) %>%
+  which() %T>%
+  print() ->
+chari
+
+# Identify the character variables by name.
+
+ds %>% 
+  names() %>% 
+  '['(chari) %T>% 
+  print() ->
+charc
+
+# Observe the unique levels.
+
+ds[charc] %>% sapply(unique)
+
+# How many diagnoses are represented in the dataset.
+
+ds$diagnosis %>% 
+  unique() %>%
+  length()
+
+# Here is a list of diagnoses and their frequencies in the dataset
+ds$diagnosis %>%
+  table()
+
+```
+
+```{r}
+# Convert character to numeric where needed
+# Identify the vairables to process.
+
+cvars <- c("session_year")
+
+# Check the current class of the variables.
+
+ds[cvars] %>% sapply(class)
+```
+
+```{r}
+# Convert to numeric.
+
+ds[cvars] %<>% sapply(as.numeric)
+
+# Review some random values.
+
+sample(ds$session_year, 10)
+```
+
+```{r}
+# Convert character to factor where needed
+# Review the distribution of observations across levels.
+
+ds %>%
+  select(diagnosis, sex, race, ad_present) %>%
+  sapply(table)
+
+```
+
+```{r}
+# Note the names of the desired variables.
+
+ds %>% 
+  select(diagnosis, sex, race, ad_present) %>% 
+  names() %T>%
+  print() ->
+vnames
+
+# Convert these variables from character to factor.
+
+ds[vnames] %<>% 
+  lapply(factor, ordered = FALSE) %>% 
+  data.frame() %>% 
+  as_tibble()
+
+# Confirm they are now factors.
+
+ds[vnames] %>% sapply(class)
+```
+
+```{r}
+# Verify the distribution has not changed.
+
+ds %>%
+  select(all_of(vnames)) %>%
+  sapply(table)
+
+```
+
+```{r Numeric Variables}
+ds %>%
+  sapply(is.numeric) %>%
+  which() %>%
+  names %T>%
+  print() ->
+numi
+
+ds[numi] %>% 
+  summary()
+```
+
+```{r}
+# Note the identifiers.
+
+id <- c("inddid", "session_date", "flywheel_session_label")
+
+# Initialise ignored variables: identifiers.
+
+ignore <- c(id)
+
+# Heuristic for candidate indentifiers to possibly ignore.
+
+ds[vars] %>%
+  sapply(function(x) x %>% unique() %>% length()) %>%
+  equals(nrow(ds)) %>%
+  which() %>%
+  names() %T>%
+  print() ->
+ids
+
+```
+
+```{r}
+# Once we have identified all of the variables to ignore we remove them from our list of variables to use.
+# Check the number of variables currently.
+
+length(vars)
+
+# Remove the variables to ignore.
+
+vars <- setdiff(vars, ignore)
+
+# Confirm they are now ignored.
+
+length(vars)
+```
+
+<!-- # Data Exploration -->
+
+```{r A random sample of the dataset}
+ds %>% sample_frac()
+```
+
+```{r Count groups}
+ds %>% count(diagnosis)
+
+```
+
+```{r Constants}
+# Identify variables that have a single value.
+
+ds %>%
+  select(all_of(vars)) %>%
+  sapply(function(x) all(x == x[1L])) %>%
+  which() %>%
+  names() %T>%
+  print() ->
+constants
+
+```
+
+Correlated variables
+
+```{r, include=FALSE}
+# For the numeric variables generate a table of correlations
+
+ds %>%
+  correlate() %>%
+  shave() %>%
+  fashion()
+
+ds %>%
+  correlate() %>%
+  rearrange() %>%
+  rplot()
+
+ds %>%
+  corrr::correlate() %>%
+  shave() %>%
+  stretch() %>%
+  filter(abs(r) > 0.90)
+
+ds %>%
+  correlate() %>%
+  rearrange() %>% 
+  focus(age_at_mri) 
+
+```
+
+```{r, include=TRUE}
+ds %>%
+  correlate() %>%
+  network_plot()
+```
+
+```{r Missing values}
+# Count the number of missing values.
+
+ds %>% is.na() %>% sum()
+
+# No missing values in the first two columns (INDDID and diagnosis)
+
+ds[1:2] %>% is.na() %>% sum()
+
+ds$education %<>% na.roughfix()
+
+# Confirm that no missing values remain.
+
+ds %>% is.na() %>% sum()
+```
+
+```{r Save cleaned dataframe for future use}
+saveRDS(ds, file = here("objects/ashs_clean.RDS"))
+```
+
+# Results
+
+## Density Plots numerical variables
+
+```{r, results = 'asis', include=TRUE}
+ds %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +  
+  theme(axis.text.x = element_text(size = 4)) +
+  facet_wrap(~ key, scales = "free") +   # In separate panels
+    geom_histogram() + 
+  theme(strip.text.x = element_text(size = 6))
+```
+
+## Boxplots numerical variables
+
+```{r, results = 'asis', include=TRUE}
+ds %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free") + 
+    stat_boxplot(geom = "errorbar", width = 0.5) + # In separate panels
+    geom_boxplot()              +            # boxplot
+  theme(strip.text.x = element_text(size = 6))+
+  theme(axis.text.x = element_text(size = 4))
+  
+```
+
+## Demographics and Clinical Data
+
+```{r Table 1}
+#cleaned unadjusted data:
+ds
+
+#reorder levels for table display
+any_na(ds$diagnosis)
+ds$diagnosis <- factor(ds$diagnosis, 
+                                 levels = c("DLB", "PDD", "PD", "Normal"))
+any_na(ds$diagnosis)
+
+any_na(ds$race)
+ds$race <- fct_collapse(ds$race, 
+                        White = "White", 
+                        `Non-White or Unknown` = c("More than One Race", "Black or African American",
+                                                                       "Asian", "Unknown or Not Reported"))
+any_na(ds$race)
+
+fct_lump_n(ds$race, n=2, other_level = "Other")
+
+ds$ad_present <- as.character(ds$ad_present)
+ds$ad_present[ds$diagnosis == "Normal"] <- "Normal"
+ds$ad_present %>% table()
+
+ds$ad_present <- factor(ds$ad_present, 
+                             levels = c("Normal", "LBD-AD", "LBD+AD"), 
+                             labels = c("Control", "LBD-AD", "LBD+AD"))
+
+ds$ad_present %>% table()
+
+
+```
+
+### Table 1: Cases + Controls
+
+```{r Print Table 1: Cases + Controls, include = TRUE}
+#add labels
+label(ds$session_year) <- "Year of MRI"
+label(ds$ad_present) <- "AD+"
+label(ds$diagnosis) <- "Clinical Diagnosis"
+label(ds$age_at_mri) <- "Age"
+label(ds$sex) <- "Sex Assigned at Birth"
+units(ds$education) <- "years"
+label(ds$education) <- "Education"
+label(ds$race) <- "Self-Reported Race"
+
+caption <- c("")
+
+table1(~ age_at_mri + sex + race + education + diagnosis| ad_present, data = ds, topclass="Rtable1-grid", )
+
+```
+
+### Cases only
+
+```{r print table 1 - Cases only, include=TRUE}
+df_tbl1_marker <- ds %>% 
+  filter(diagnosis!="Normal")
+
+table1(~ sex + race + age_at_mri + diagnosis + education | ad_present, data = df_tbl1_marker)
+
+```
+
+## Figure 1: Subregion Volumes, unadjusted
+
+```{r subregion vols raw, include = FALSE}
+#obtain order of regions by mean volume 
+df_raw_vol <- ds %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>% 
+  select(-contains(c("MISC", "Meninges", "icv", "sul"))) %>% 
+  pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>% 
+  mutate(ad_present = as.factor(ad_present))
+
+df_raw_vol %>% 
+  group_by(Region) %>% 
+  summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol)) 
+
+df_raw_vol$Region <- recode_factor(df_raw_vol$Region, 
+                           left_anterior_hippocampus= "L Ant Hip",
+                           right_anterior_hippocampus = "R Ant Hip",
+                           left_Posterior_hippocampus = "L Post Hip", 
+                           right_Posterior_hippocampus = "R Post Hip",
+                           left_Br36 = "L Br36",
+                           right_Br36 = "R Br36",
+                           left_PHC = "L PHC", 
+                           right_PHC = "R PHC", 
+                           left_Br35 = "L Br35", 
+                           right_Br35 = "R Br35",
+                           left_ERC = "L ERC", 
+                           right_ERC = "R ERC")
+
+df_raw_vol$ad_present <- recode_factor(df_raw_vol$ad_present,
+                               Normal = "Control",
+                               `FALSE` = "LBD-AD",
+                               `TRUE` = "LBD+AD")
+
+
+plot <- 
+  ggplot(df_raw_vol, aes(x = ad_present, y = Volume)) +
+  geom_boxplot() + 
+  facet_wrap(.~Region, scales = "free") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Subregion Volumes, Unadjusted", 
+       y = "Volume (cm^3)",
+       x = "Case Status") +
+  font("y", size = 15) +
+  font("x", size = 15) +
+  theme(strip.text.x = element_text(size = 10)) +
+  geom_jitter(alpha = 0.2, size =1)
+
+```
+
+```{r include=TRUE}
+plot
+```
+
+```{r interactive subregion volume plot}
+# gt(mydata.filter)
+# # now with a few more options
+# mydata.filter %>%
+#   gt() %>%
+#   fmt_number(columns=2:4, decimals = 1) %>%
+#   tab_header(title = md("**Regulators of skin pathogenesis**"),
+#              subtitle = md("*during cutaneous leishmaniasis*")) %>%
+#   tab_footnote(
+#     footnote = "Deletion or blockaid ameliorates disease in mice",
+#     locations = cells_body(
+#       columns = geneID,
+#       rows = c(6, 7))) %>% 
+#   tab_footnote(
+#     footnote = "Associated with treatment failure in multiple studies",
+#     locations = cells_body(
+#       columns = geneID,
+#       rows = c(2:9))) %>%
+#   tab_footnote(
+#     footnote = "Implicated in parasite control",
+#     locations = cells_body(
+#       columns = geneID,
+#       rows = c(2))) %>%
+#   tab_source_note(
+#     source_note = md("Reference: Amorim *et al*., (2019). DOI: 10.1126/scitranslmed.aar3619"))
+# 
+# 
+# # Make an interactive table using the DT package ----
+# datatable(mydata.df[,c(1,12:14)], 
+#           extensions = c('KeyTable', "FixedHeader"), 
+#           filter = 'top',
+#           options = list(keys = TRUE, 
+#                          searchHighlight = TRUE, 
+#                          pageLength = 10, 
+#                          lengthMenu = c("10", "25", "50", "100")))
+# 
+# # Make an interactive scatter plot with plotly -----
+# # begin by storing your ggplot object
+# myplot <- ggplot(mydata.df) + 
+#   aes(x=healthy.AVG, y=disease.AVG) +
+#   geom_point(shape=16, size=1) +
+#   ggtitle("disease vs. healthy") +
+#   theme_bw()
+# 
+# #now use the ggplotly function from the plotly package to convert this ggplot object into an interactive plot
+# ggplotly(myplot)
+# 
+# #let's customize this graphic by adding a more informative mouseover tooltip
+# myplot <- ggplot(mydata.df) +
+#   aes(x=healthy.AVG, y=disease.AVG, 
+#       text = paste("Symbol:", geneID)) +
+#   geom_point(shape=16, size=1) +
+#   ggtitle("disease vs. healthy") +
+#   theme_bw()
+# 
+# ggplotly(myplot)
+```
+
+## Unadjusted Volumes Regression
+
+Does AD case status predict volume?
+
+```{r regression using unadjusted vols, echo=TRUE}
+# create cases_df
+cases_df <- ds %>%  select(-contains(c("misc", "meninges"))) %>% filter(!diagnosis %in% c("Normal")) %>% 
+  mutate(ad_present = ifelse(ad_present == "LBD+AD", 1,
+                              ifelse(ad_present == "LBD-AD", 0,
+                                      "NA")))
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+vol_start <- grep("left_anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars
+vol_end <- grep("right_ot_sul$", colnames(cases_df)) #column index to end
+vol_nvar <- vol_end - vol_start + 1
+
+# shift within df 
+out_shift <- vol_start - 1
+  
+#For loop
+dat <- cases_df
+out_mod <- vector('list', length(vol_nvar))
+i <- vol_start
+  
+for (i in vol_start:vol_end){
+  raw_volume = colnames(dat)[i]
+  
+mod_1 <- lm(get(raw_volume) ~ ad_present + diagnosis,
+      na.action = na.exclude,
+      data=dat)
+
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+}
+
+
+library(broom)
+
+out_mod_summary <- summary(out_mod[[1]])
+out_mod_summary$coefficients %>% as_tibble()
+z <- tidy(mod_1, conf.int =T)[2,]
+z %>% mutate(region = names(out_mod[1]))
+
+tidy(out_mod[[1]])
+
+names(out_mod[1])
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(conf.high) %>% 
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>% 
+  select(Region = "region", `Estimate` = "estimate", 
+         `S.E.` = "std.error", p = "p.value", `2.5% CI` = "conf.low", `97.5% CI` = "conf.high") 
+
+library(kableExtra)
+table <- knitr::kable(df1, digits = 4,
+  caption = 'Models of Unadjusted Subfield Volumes for +AD and diagnosis')
+
+# remove(df, df1, z, table, out_mod_summary, vol_end, vol_nvar, vol_start, dat, out, out_mod)
+```
+
+```{r Models of Unadjusted Subfield Vols for +AD and diagnosis, include=TRUE}
+kable_classic_2(table)
+```
+
+## Regression with adjusted volumes
+
+Adjusted (for Age, Sex, ICV) Volumes Regression, before matching
+
+```{r, include=FALSE}
+# Calculate adjusted volumes using "predict" based on all controls
+# Add columns with volumes adjusted for ICV 
+
+ctrl_df <- ds %>% filter(diagnosis == "Normal")
+cases_df <- ds %>% filter(diagnosis != "Normal")
+regions <- colnames(ds) %>% .[grepl(., pattern = "*.t_.*")] %>% .[1:22] %>% noquote(.)
+
+out <- vector('list', length(regions))
+  
+
+for (i in seq_along(regions)) {
+out[[i]] <- lm(paste(regions[i], '~', 'left_icv + age_at_mri + sex'), data=ctrl_df)
+
+ctrl_df[ , ncol(ctrl_df) + 1] <- predict(out[[i]], newdata=ctrl_df)
+
+colnames(ctrl_df)[ncol(ctrl_df)] <-  paste0(regions[i], "_adjusted")
+
+cases_df[ , ncol(cases_df) + 1] <- predict(out[[i]], newdata=cases_df)
+
+colnames(cases_df)[ncol(cases_df)] <-  paste0(regions[i], "_adjusted")
+
+}
+
+d2 <- rbind(ctrl_df, cases_df)
+
+#Example correlation for L anterior hippocampus
+ggscatter(ctrl_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Controls)")
+
+ggscatter(cases_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Cases)")
+
+
+# Correlated variables
+# For the numeric variables generate a table of correlations
+
+cases_df %>%
+  corrr::correlate() %>%
+  shave() %>%
+  stretch() %>%
+  filter(abs(r) > 0.90) %>% 
+  arrange(r)
+
+```
+
+```{r, include=FALSE}
+# Is AD case status a predictor of volume  
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+raw_start <- grep("left_anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars
+raw_end <- grep("right_ot_sul$", colnames(cases_df)) #column index to end
+raw_nvar <- raw_end - raw_start + 1
+
+# "exposure" (adjusted region volume)
+adjusted_start <- grep("left_anterior_hippocampus_adjusted", colnames(cases_df))
+adjusted_end <- grep("right_ot_sul_adjusted", colnames(cases_df))
+adjusted_nvar <- adjusted_end - adjusted_start + 1
+
+# shift within df 
+shift_index <- adjusted_start - raw_start
+out_shift <- raw_start - 1
+  
+# modify cases_df
+cases_df %<>%
+  mutate(ad_present = recode(ad_present, `LBD-AD` = "0", `LBD+AD` = "1", Control = NULL)) %>% 
+  mutate(ad_present = as.logical(as.numeric(as.character(ad_present))))
+
+
+#For loop
+dat <- cases_df
+out_mod <- vector('list', length(raw_nvar))
+i <- raw_start
+
+for (i in raw_start:raw_end){
+  raw_volume = colnames(dat)[i]
+  adjusted_volume = colnames(dat)[i+shift_index]
+  
+mod_1 <- lm(get(raw_volume) ~ ad_present + get(adjusted_volume),
+      na.action = na.exclude,
+      data=dat)
+
+
+#Add new row for each brain region with output from model
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+
+}
+ 
+library(broom)
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(conf.high) %>% 
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>% 
+  select(Region = "region", `Estimate` = "estimate", 
+         `S.E.` = "std.error", p = "p.value") #`2.5% CI` = "conf.low", `97.5% CI` = "conf.high"
+
+library(kableExtra)
+table <- knitr::kable(df1, digits = 4,
+  caption = 'Models of Adjusted Subfield Volumes for +AD')
+```
+
+```{r include=T}
+kable_classic_2(table)
+```
+

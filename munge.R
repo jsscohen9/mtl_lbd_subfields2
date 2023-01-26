@@ -16,6 +16,7 @@ library(here)
 
 input_file <- here("data/original_INQuery_Output_2022.07.12_09.59_.xlsx")
 output_file <- here("reports", "inddids_all.csv")
+output_file_2 <- here("reports", "inddids_controls.csv")
 
 # Unique IDs to Query for more data in INDD
 
@@ -29,6 +30,14 @@ inddids_all <-
   distinct()
 
 write_csv(inddids_all, file = output_file)
+
+inddids_controls <- 
+  original_query %>% 
+  filter(ClinicalPhenotype1=="Normal") %>% 
+  select(INDDID) %>% 
+  distinct()
+
+write_csv(inddids_controls, file = output_file_2)
 
 #clear workspace
 rm(list = ls())
@@ -134,16 +143,33 @@ input_file <- here("data/mri_bids_(2022.12.02 11.21).xlsx")
 output_file1 <- here("objects/mri_bids_data_t1.RDS")
 output_file2 <- here("objects/mri_bids_data_t2.RDS")
   
-mri_bids_data <- readxl::read_excel(input_file) %>% 
+mri_bids_data <- readxl::read_excel(input_file, col_types = "text" ) %>% 
   mutate(INDDID = as.character(INDDID))
+
+sessions_ashs <- mri_bids_data %>% select(INDDID, FlywheelSessionLabel) %>% distinct()
+
+# write_csv(sessions_ashs, file= "sessions_info_lbd.csv")
 
 mri_bids_data_2 <- 
   mri_bids_data %>% 
-  select(INDDID, FlywheelSessionLabel, FlywheelProjectLabel, FlywheelAcquisitionMeasurement, FlywheelAcquisitionLabel, DicomInstitutionName, DicomStationName,
-         DicomSliceThickness, DicomPixelSpacingX, DicomMagneticFieldStrength, DicomRepetitionTime, DicomSpacingBetweenSlices, BidsFilename)
-
-#collapse factors
-mri_bids_data_2$DicomInstitutionName <- fct_collapse(mri_bids_data_2$DicomInstitutionName) 
+  select(INDDID, FlywheelSessionLabel, FlywheelProjectLabel, 
+         FlywheelAcquisitionMeasurement, FlywheelAcquisitionLabel, 
+         FlywheelAcquisitionFeatures, FlywheelAcquisitionInternalID,
+         DicomInstitutionName, DicomStationName,
+         DicomStudyInstanceUID,
+         DicomSeriesInstanceUID,
+         DicomSliceThickness, DicomPixelSpacingX, DicomPixelSpacingY,
+         DicomSequenceName,
+         DicomMagneticFieldStrength, 
+         DicomRepetitionTime, 
+         DicomEchoTime, 
+         DicomSpacingBetweenSlices, 
+         FileName,
+         BIDSFlywheelAcquisitionInternalID,
+         BidsFilename,
+         BidsPath,
+         BidsFolder,
+         Expr2)
 
 #T1
 mri_bids_data_t1 <- mri_bids_data_2 %>% 
@@ -171,6 +197,11 @@ saveRDS(vlt, file = here("objects/vlt_raw.RDS"))
 
 epworth <- readxl::read_excel(here("data/epworth_(2022.10.04 17.59).xlsx")) %>% 
   mutate(INDDID = as.character(INDDID))
+
+rey_figure <- readxl::read_excel("data/rey_figure_(2023.01.24 13.51).xlsx") %>% 
+  mutate(INDDID = as.character(INDDID))
+
+saveRDS(rey_figure, file = here("objects/rey_figure.RDS"))
 
 #clear workspace
 rm(list = ls())
@@ -231,7 +262,7 @@ ashs_info$abc[ashs_info$ABeta %in% c("4","5") & ashs_info$CERAD %in% c("2","3") 
 
 
 # Classify as ad_present or not
-#autopsy
+#autopsy - 
 ashs_info$ad_present[ashs_info$abc %in% c("Intermediate", "High")] <- TRUE
 ashs_info$ad_present[ashs_info$abc %in% c("Not", "Low")] <- FALSE
 
@@ -416,6 +447,9 @@ mri_controls2 <- mri_controls %>%
 #select most recent MRI for controls with multiple MRIs
 mri_controls3 <- mri_controls2 %>% group_by(INDDID) %>% 
   slice_max(session_date, n=1, with_ties = FALSE)
+
+#For controls, confirm that time from enrollment in INDD is no more than 3 years 
+#from time of MRI to ensure that some of these controls are not actually now declining
 
 #merge df of selected mri dates for cases and controls
 mri_selected_all <- mri_cases %>% select(-c(ad_marker)) %>% rbind(., mri_controls3) %>% 

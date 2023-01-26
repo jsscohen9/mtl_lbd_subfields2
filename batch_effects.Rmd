@@ -22,6 +22,9 @@ library(magrittr)
 library(janitor)
 library(gt)
 library(plotly)
+
+rm(list=ls())
+
 ```
 
 
@@ -49,13 +52,31 @@ ds %<>% clean_names(numerals="right")
 
 names(ds)
 
+```
+
+```{r split dicom_series_instance}
+ds %<>%
+  mutate(scanner_id = str_match(dicom_series_instance_uid, "((\\d+\\.){9})")[,3]) %>% 
+  select(inddid, flywheel_session_label, dicom_series_instance_uid, scanner_id,
+         flywheel_acquisition_label, everything())
+
+# To get rid of the NAs created:
+# ds$scanner_id[grepl(pattern = "(1.2.826.0.1.3680043.8.498.)*", x = ds$dicom_series_instance_uid)]
+
+# See how many new NAs introduced 
+ds$dicom_series_instance_uid %>% is.na() %>% sum()
+ds$scanner_id %>% is.na() %>% which() -> na_rows
+
+ds[na_rows,]
+
+```
+
+
+```{r , results='hide', echo=FALSE}
 # Note the available variables.
 
 vars <- names(ds)
 
-```
-
-```{r , results='hide', echo=FALSE}
 # Note the identifiers.
 
 id <- c("inddid", "flywheel_session_label", "bids_filename")
@@ -99,7 +120,7 @@ charc
 
 # Observe the unique levels.
 
-ds[charc] %>% sapply(unique) 
+ds[charc] %>% select(dicom_station_name, scanner_id) %>% sapply(unique)
 
 # # Which columns have > 5 unique levels?
 # charc_long <- 
@@ -113,18 +134,18 @@ ds[charc] %>% sapply(unique)
 ```
 
 ```{r Numeric Variables ,results='hide', echo=FALSE}
-ds[vars] %>%
-  sapply(is.numeric) %>%
-  which() %>%
-  names ->
-numi
-
-ds[numi] %>% 
-  summary()
+# ds[vars] %>%
+#   sapply(is.numeric) %>%
+#   which() %>%
+#   names ->
+# numi
+# 
+# ds[numi] %>% 
+#   summary()
 ```
 
 ```{r remove columns from ds before joining, results='hide', echo=FALSE}
-ds %<>% select(inddid, flywheel_session_label, contains("dicom")) %>% distinct()
+ds %<>% select(inddid, flywheel_session_label, scanner_id, contains("dicom")) %>% distinct()
 ```
 
 ```{r join ashs with bids}
@@ -133,19 +154,25 @@ ds1 <-
   left_join(ds) %>% 
   distinct() 
 
-ds1 
 
-# Convert bids/dicom numerical variables to factors
-ds1[numi] <- round(ds1[numi])
+ds1$dicom_series_instance_uid %>% is.na() %>% sum()
+ds1$scanner_id %>% is.na() %>% which() -> na_rows
 
-ds1[numi] <- sapply(ds1[numi], as.factor)
+which(grepl("3680043.8.498", as.character(ds1$dicom_series_instance_uid))) -> indices
 
-# filter out duplicates - need to check to make sure this isn't causing the problem 
-ds1  %<>% filter(dicom_slice_thickness == 1 &
-                  dicom_spacing_between_slices !=8) %>% 
-  distinct()
+setdiff(na_rows, indices)
 
-ds1
+# # Convert bids/dicom numerical variables to factors
+# ds1[numi] <- round(ds1[numi])
+# 
+# ds1[numi] <- sapply(ds1[numi], as.factor)
+# 
+# # filter out duplicates - need to check to make sure this isn't causing the problem 
+# ds1  %<>% filter(dicom_slice_thickness == 1 &
+#                   dicom_spacing_between_slices !=8) %>% 
+#   distinct()
+
+
 ```
 
 ```{r simplify factors for batch correction}
@@ -154,58 +181,102 @@ fct_count(ds1$dicom_station_name) %>% arrange(desc(n))
 ds1$dicom_station_name <-
 ds1$dicom_station_name %>%
   replace_na("other") %>% 
-  as.factor() %>% 
-  fct_collapse(
-    hup6 = c("hup6", "HUP FNDBA MR2", "MRC35154", "MRC20523"),
-    dr1 = c("dr1", "HUP DEVGR MR1", "c93verio", "hup devon mrd1",
-            "MRC21236", "other")
-  )
+  as.factor()
+  # fct_collapse(
+  #   hup6 = c("hup6", "HUP FNDBA MR2", "MRC35154", "MRC20523"),
+  #   dr1 = c("dr1", "HUP DEVGR MR1", "c93verio", "hup devon mrd1",
+  #           "MRC21236", "other")
+  # )
   
-# fct_count(ds1$dicom_institution_name) %>% arrange(desc(n))
+# I think the NAs introduced in scanner_id are from PDC since 
+# they're almost all PD/PDD subjects (except 1 control), 
+# and the dicom_series_instance_iud ends in 
+# 3680043.8.498
+fct_count(ds1$scanner_id) %>% arrange(desc(n))
+ds1$scanner_id <- 
+  ds1$scanner_id %>% 
+    replace_na("other") %>% 
+    as.factor()
+
+# check the station_name associated with each number; for HUP6 (35069), 
+# split factor into 
+# before May 1, 2017 and after since taht is when the scanner was upgraded 
+# from trimtrio to prisma
+
+ds2 <- ds1 %>% 
+  mutate(recent_scan = session_date > as.Date("2017-05-01"),
+  batch = paste(dicom_station_name, scanner_id, recent_scan, sep = "_")) 
+  
+ds2 %>% 
+group_by(batch) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))
+
+
+# Remove any remaining duplicates after collapsing factors
+fct_count(ds2$batch) %>% arrange(desc(n))
+ds2$batch <-
+  fct_collapse(
+  ds2$batch,
+  hup_35154_pre_2017 = c("dr1_35154._FALSE", 
+                         "HUP DEVGR MR1_35154._FALSE",
+                        "hup devon mrd1_35154._FALSE"),
+  hup_167024 = c("HUP FNDBA MR2_167024._TRUE"),
+  hup_35154_post_2017 = c("HUP DEVGR MR1_35154._TRUE",
+                          "MRC35154_35154._TRUE"),
+  hup_35069 = c("hup6_35069._FALSE", 
+                "HUP FNDBA MR2_35069._FALSE"),
+  hup_20523 = c("MRC20523_20523._FALSE", 
+              "MRC20523_other_FALSE"),
+  other = c("NA_other_FALSE", 
+                  "c93verio_40171._FALSE", 
+                  "MRC21236_21236._FALSE")
+)
+
+
+ds2 %<>% select(-contains("dicom")) %>% distinct()
+ds2 %>% filter(duplicated(inddid))
+
 ```
 
 ```{r collapse factors, results='hide', echo=FALSE}
-# Slice thickness
-fct_count(ds1$dicom_slice_thickness)
-ds1$dicom_slice_thickness <- fct_collapse(
-  ds1$dicom_slice_thickness, 
-  `1` = c("1", "2"),
-  `4` = c("4", "5"))
-fct_count(ds1$dicom_slice_thickness)
-
-# Pixel spacing
-fct_count(ds1$dicom_pixel_spacing_x)
-ds1$dicom_pixel_spacing_x <- fct_collapse(
-  ds1$dicom_pixel_spacing_x, 
-  `1` = c("0", "1"))
-fct_count(ds1$dicom_pixel_spacing_x)
-
-# Field strength
-fct_count(ds1$dicom_magnetic_field_strength)
-ds1$dicom_magnetic_field_strength <- fct_collapse(
-  ds1$dicom_magnetic_field_strength, 
-  `1.5` = c("1", "15000"),
-  `3` = c("2", "3"))
-fct_count(ds1$dicom_magnetic_field_strength)
-
-# Repetition 
-fct_count(ds1$dicom_repetition_time)
-ds1$dicom_repetition_time <- fct_collapse(
-  ds1$dicom_repetition_time, 
-  `10` = c("10", "11", "440", "700"),
-  `1620` = c("1140", "1620", "1800", "1900", "2300", "2400", "3000"))
-fct_count(ds1$dicom_repetition_time)
-
-# Spacing between slices
-fct_count(ds1$dicom_spacing_between_slices)
-ds1$dicom_spacing_between_slices <- fct_collapse(
-  ds1$dicom_spacing_between_slices, 
-  `8` = c("5", "6", "8"))
-fct_count(ds1$dicom_spacing_between_slices)
-
-# Remove any remaining duplicates after collapsing factors
-ds1 %<>% distinct()
-ds1 %>% filter(duplicated(inddid))
+# # Slice thickness
+# fct_count(ds1$dicom_slice_thickness)
+# ds1$dicom_slice_thickness <- fct_collapse(
+#   ds1$dicom_slice_thickness, 
+#   `1` = c("1", "2"),
+#   `4` = c("4", "5"))
+# fct_count(ds1$dicom_slice_thickness)
+# 
+# # Pixel spacing
+# fct_count(ds1$dicom_pixel_spacing_x)
+# ds1$dicom_pixel_spacing_x <- fct_collapse(
+#   ds1$dicom_pixel_spacing_x, 
+#   `1` = c("0", "1"))
+# fct_count(ds1$dicom_pixel_spacing_x)
+# 
+# # Field strength
+# fct_count(ds1$dicom_magnetic_field_strength)
+# ds1$dicom_magnetic_field_strength <- fct_collapse(
+#   ds1$dicom_magnetic_field_strength, 
+#   `1.5` = c("1", "15000"),
+#   `3` = c("2", "3"))
+# fct_count(ds1$dicom_magnetic_field_strength)
+# 
+# # Repetition 
+# fct_count(ds1$dicom_repetition_time)
+# ds1$dicom_repetition_time <- fct_collapse(
+#   ds1$dicom_repetition_time, 
+#   `10` = c("10", "11", "440", "700"),
+#   `1620` = c("1140", "1620", "1800", "1900", "2300", "2400", "3000"))
+# fct_count(ds1$dicom_repetition_time)
+# 
+# # Spacing between slices
+# fct_count(ds1$dicom_spacing_between_slices)
+# ds1$dicom_spacing_between_slices <- fct_collapse(
+#   ds1$dicom_spacing_between_slices, 
+#   `8` = c("5", "6", "8"))
+# fct_count(ds1$dicom_spacing_between_slices)
 
 ```
 
@@ -227,13 +298,13 @@ I need to see which files ashs was run with to make sure the other slice thickne
 ####################################
 ### TRY WITH RAW DATA - PREDICTING STATION NAME
 mtl_nums <- 
-  ds1 %>% 
+  ds2 %>% 
   select((contains("left_") | 
             contains("right_")) &
            -contains("sul"))
 
 y_raw <- mtl_nums
-y_raw$y <- as.factor(ds1$dicom_station_name=="hup6")
+y_raw$y <- as.factor(ds2$batch=="hup_35069")
 set.seed(9458)
 inTraining <- createDataPartition(y_raw$y, p = .5, list = FALSE)
 training <- y_raw[ inTraining,]
@@ -254,7 +325,7 @@ plot(perf)
 
 ####################################
 ### TRY WITH RAW DATA - PREDICTING DX
-y_raw$y<-factor(ds1$diagnosis=='Normal')
+y_raw$y<-factor(ds2$diagnosis=='Normal')
 set.seed(9458)
 inTraining <- createDataPartition(y_raw$y, p = .5, list = FALSE)
 training <- y_raw[ inTraining,]
@@ -273,23 +344,23 @@ auc1<-performance(pred, measure = "auc")@y.values[[1]]
 auc1_diagnosis_raw <- print(auc1)
 roc_diagnosis_raw <- plot(perf, col=rainbow(10)) 
 ```
-
+## Batch correction successful
 ```{r}
 ### TRY WITH COMBAT DATA
-age <- ds1$age_at_mri
-disease <- as.factor(ds1$diagnosis != "Normal")
-sex <- ds1$sex
-education <- ds1$education
+age <- ds2$age_at_mri
+disease <- as.factor(ds2$diagnosis != "Normal")
+sex <- ds2$sex
+education <- ds2$education
 
 y_combat <- data.frame(t(neuroCombat(t(mtl_nums), 
-                                     bat = as.numeric(factor(ds1$dicom_station_name)), 
+                                     bat = as.numeric(factor(ds2$batch)), 
                                      mod = model.matrix(~ age + sex + disease +
                                                           education,
-                                                        data = ds1))$dat.combat))
+                                                        data = ds2))$dat.combat))
 
 ####################################
 ### TRY WITH COMBAT DATA - PREDICTING DICOM STATION NAME
-y_combat$y<-factor(ds1$dicom_station_name=='hup6')
+y_combat$y<-factor(ds2$batch=='hup_35069')
 set.seed(9458)
 inTraining <- createDataPartition(y_combat$y, p = .5, list = FALSE)
 training <- y_combat[ inTraining,]
@@ -309,7 +380,7 @@ plot(perf, col=rainbow(10))
 
 ####################################
 ### TRY WITH COMBAT DATA - PREDICTING DX
-y_combat$y<-factor(ds1$diagnosis=='Normal')
+y_combat$y<-factor(ds2$diagnosis=='Normal')
 set.seed(9458)
 inTraining <- createDataPartition(y_combat$y, p = .5, list = FALSE)
 training <- y_combat[ inTraining,]
@@ -328,16 +399,17 @@ print(auc1)
 plot(perf, col=rainbow(10))
 
 ```
+
 ### TRY WITH COMBAT DATA- FORGET DX ADJUSTMENT
 This should make it harder to accurately predict the station name, 
 but also will washout disease effects making it harder to predict disease
 ```{r}
-y_combat <- data.frame(t(neuroCombat(t(mtl_nums), bat = as.numeric(factor(ds1$dicom_station_name)))$dat.combat))
+y_combat <- data.frame(t(neuroCombat(t(mtl_nums), bat = as.numeric(factor(ds2$batch)))$dat.combat))
 ```
 
 ### TRY WITH COMBAT DATA - PREDICTING DICOM STATION NAME
 ```{r}
-y_combat$y<-factor(ds1$dicom_station_name=='hup6')
+y_combat$y<-factor(ds2$batch=='hup_35069')
 set.seed(9458)
 inTraining <- createDataPartition(y_combat$y, p = .5, list = FALSE)
 training <- y_combat[ inTraining,]
@@ -357,7 +429,7 @@ plot(perf, col=rainbow(10))
 
 ####################################
 ### TRY WITH COMBAT DATA - PREDICTING DX
-y_combat$y<-factor(ds1$diagnosis=='Normal')
+y_combat$y<-factor(ds2$diagnosis=='Normal')
 set.seed(9458)
 inTraining <- createDataPartition(y_combat$y, p = .5, list = FALSE)
 training <- y_combat[ inTraining,]
@@ -379,13 +451,13 @@ plot(perf, col=rainbow(10))
 
 ```{r}
 ### TRY WITH COVBAT DATA
-y_covbat <- data.frame(t(covbat(t(mtl_nums), bat = as.numeric(factor(ds1$dicom_station_name)),
+y_covbat <- data.frame(t(covbat(t(mtl_nums), bat = as.numeric(factor(ds2$batch)),
                                 mod = model.matrix(~ age + sex + disease + education,
-                                                   data = ds1))$dat.covbat))
+                                                   data = ds2))$dat.covbat))
 
 ####################################
 ### TRY WITH COVBAT DATA - PREDICTING DICOM STATION NAME
-y_covbat$y<-factor(ds1$dicom_station_name=='hup6')
+y_covbat$y<-factor(ds2$batch=='hup_35069')
 set.seed(9458)
 inTraining <- createDataPartition(y_covbat$y, p = .5, list = FALSE)
 training <- y_covbat[ inTraining,]
@@ -405,7 +477,7 @@ plot(perf)
 
 ####################################
 ### TRY WITH COVBAT DATA - PREDICTING DX
-y_covbat$y<-factor(ds1$diagnosis=='Normal')
+y_covbat$y<-factor(ds2$diagnosis=='Normal')
 set.seed(9458)
 inTraining <- createDataPartition(y_covbat$y, p = .5, list = FALSE)
 training <- y_covbat[ inTraining,]
@@ -516,18 +588,426 @@ plot(perf)
 <!-- ```{r} -->
 <!-- combat.harmonized <- neuroCombat(dat=dat, batch=batch, mod=mod) -->
 <!-- ``` -->
+# Unadjusted for ICV, before batch correction
+## Boxplots
+```{r boxplots}
+title <- "Subregion Volumes, Unadjusted (Before Batch Correction)"
+input <- ashs_clean
+#obtain order of regions by mean volume
+df_raw_vol <- input %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>%
+  select(-contains(c("misc", "meninges", "sul"))) %>%
+  pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>%
+  mutate(ad_present = as.factor(ad_present))
+
+df_raw_vol %>%
+  group_by(Region) %>%
+  summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol))
+
+df_raw_vol$Region <- recode_factor(df_raw_vol$Region,
+                           left_anterior_hippocampus= "L Ant Hip",
+                           right_anterior_hippocampus = "R Ant Hip",
+                           left_posterior_hippocampus = "L Post Hip",
+                           right_posterior_hippocampus = "R Post Hip",
+                           left_br_36 = "L Br36",
+                           right_br_36 = "R Br36",
+                           left_phc = "L PHC",
+                           right_phc = "R PHC",
+                           left_br_35 = "L Br35",
+                           right_br_35 = "R Br35",
+                           left_erc = "L ERC",
+                           right_erc = "R ERC",
+                           left_icv = "ICV")
+
+df_raw_vol$ad_present <- recode_factor(df_raw_vol$ad_present,
+                               Normal = "Control",
+                               `FALSE` = "LBD-AD",
+                               `TRUE` = "LBD+AD")
 
 
-## Figure 1: Subregion Volumes, unadjusted after batch adjustment for dicom station
-```{r subregion vols raw}
+plot <-
+  ggplot(df_raw_vol, aes(x = ad_present, y = Volume)) +
+  geom_boxplot() +
+  facet_wrap(.~Region, scales = "free") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = title,
+       y = "Volume (cm^3)",
+       x = "Case Status") +
+  font("y", size = 15) +
+  font("x", size = 15) +
+  theme(strip.text.x = element_text(size = 7)) +
+  geom_jitter(alpha = 0.2, size =1)
+
+plot
+```
+
+## Regression - Controls vs Cases
+```{r regression}
+df <- ashs_clean
+title <- c("Unadjusted Vols, Before Batch Correction (Control = 0, Case = 1)")
+
+# Define comparison, i.e. control = 0, case = 1 
+df1 <- df %>%  select(-contains(c("misc", "meninges"))) %>%
+  mutate(case_status = ifelse(diagnosis == "Normal", 0,
+                              ifelse(diagnosis != "Normal", 1,
+                                      "NA")))
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
+vol_end <- grep("right_phc$", colnames(df1)) #column index to end
+vol_nvar <- vol_end - vol_start + 1
+
+# shift within df
+out_shift <- vol_start - 1
+
+#For loop
+dat <- df1
+out_mod <- vector('list', length(vol_nvar))
+i <- vol_start
+
+for (i in vol_start:vol_end){
+  raw_volume = colnames(dat)[i]
+
+mod_1 <- lm(get(raw_volume) ~ case_status,
+      na.action = na.exclude,
+      data=dat)
+
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+}
+
+
+library(broom)
+
+out_mod_summary <- summary(out_mod[[1]])
+out_mod_summary$coefficients %>% as_tibble()
+z <- tidy(mod_1, conf.int =T)[2,]
+z %>% mutate(region = names(out_mod[1]))
+
+tidy(out_mod[[1]])
+
+names(out_mod[1])
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(p.value) %>%
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>%
+  select(Region = "region", `Estimate` = "estimate", p = "p.value")
+
+library(kableExtra)
+table <- knitr::kable(df1, digits = 4,
+  caption = title)
+
+kable_classic_2(table)
+
+```
+
+
+
+## Regression - AD+ vs AD - 
+```{r regression}
+df <- ashs_clean
+title <- c("Not Batch Corrected; not divided by ICV (AD- = 0, AD+ = 1)")
+
+# Define comparison, i.e. control = 0, case = 1 
+df1 <- df %>%  select(-contains(c("misc", "meninges"))) %>%
+  filter(ad_present != "Control") %>% 
+  mutate(case_status = ifelse(ad_present == "LBD-AD", 0,
+                              ifelse(ad_present == "LBD+AD", 1,
+                                      "NA")))
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
+vol_end <- grep("right_phc$", colnames(df1)) #column index to end
+vol_nvar <- vol_end - vol_start + 1
+
+# shift within df
+out_shift <- vol_start - 1
+
+#For loop
+dat <- df1
+out_mod <- vector('list', length(vol_nvar))
+i <- vol_start
+
+for (i in vol_start:vol_end){
+  raw_volume = colnames(dat)[i]
+
+mod_1 <- lm(get(raw_volume) ~ case_status,
+      na.action = na.exclude,
+      data=dat)
+
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+}
+
+
+library(broom)
+
+out_mod_summary <- summary(out_mod[[1]])
+out_mod_summary$coefficients %>% as_tibble()
+z <- tidy(mod_1, conf.int =T)[2,]
+z %>% mutate(region = names(out_mod[1]))
+
+tidy(out_mod[[1]])
+
+names(out_mod[1])
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(p.value) %>%
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>%
+  select(Region = "region", `Estimate` = "estimate", p = "p.value")
+
+library(kableExtra)
+table <- knitr::kable(df1,
+  caption = title)
+
+kable_classic_2(table)
+
+```
+
+
+
+# Adjusted for ICV, before batch correction
+```{r}
+df1 <- ashs_clean
+vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
+vol_end <- grep("left_icv$", colnames(df1)) #column index to end
+
+ashs_clean
+ashs_adjusted <- ashs_clean[vol_start:vol_end] %>% transmute(./(left_icv*100)) %>% cbind(ashs_clean[1:(vol_start-1)])
+
+saveRDS(ashs_adjusted, file = "objects/ashs_adjusted_icv.RDS")
+```
+
+## Boxplots
+```{r boxplots}
+title <- "Subregion Volumes, Adjusted (Before Batch Correction)"
+input <- ashs_adjusted
+#obtain order of regions by mean volume
+df_raw_vol <- input %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>%
+  select(-contains(c("misc", "meninges", "sul"))) %>%
+  pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>%
+  mutate(ad_present = as.factor(ad_present))
+
+df_raw_vol %>%
+  group_by(Region) %>%
+  summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol))
+
+df_raw_vol$Region <- recode_factor(df_raw_vol$Region,
+                           left_anterior_hippocampus= "L Ant Hip",
+                           right_anterior_hippocampus = "R Ant Hip",
+                           left_posterior_hippocampus = "L Post Hip",
+                           right_posterior_hippocampus = "R Post Hip",
+                           left_br_36 = "L Br36",
+                           right_br_36 = "R Br36",
+                           left_phc = "L PHC",
+                           right_phc = "R PHC",
+                           left_br_35 = "L Br35",
+                           right_br_35 = "R Br35",
+                           left_erc = "L ERC",
+                           right_erc = "R ERC",
+                           left_icv = "ICV")
+
+df_raw_vol$ad_present <- recode_factor(df_raw_vol$ad_present,
+                               Normal = "Control",
+                               `FALSE` = "LBD-AD",
+                               `TRUE` = "LBD+AD")
+
+
+plot <-
+  ggplot(df_raw_vol, aes(x = ad_present, y = Volume)) +
+  geom_boxplot() +
+  facet_wrap(.~Region, scales = "free") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = title,
+       y = "Volume (cm^3)",
+       x = "Case Status") +
+  font("y", size = 15) +
+  font("x", size = 15) +
+  theme(strip.text.x = element_text(size = 7)) +
+  geom_jitter(alpha = 0.2, size =1)
+
+plot
+```
+
+
+## Regression - Controls vs Cases
+```{r regression}
+df <- ashs_adjusted
+title <- c("Adjusted Vols, Before Batch Correction (Control = 0, Case = 1)")
+
+# Define comparison, i.e. control = 0, case = 1 
+df1 <- df %>%  select(-contains(c("misc", "meninges"))) %>%
+  mutate(case_status = ifelse(diagnosis == "Normal", 0,
+                              ifelse(diagnosis != "Normal", 1,
+                                      "NA")))
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
+vol_end <- grep("right_phc$", colnames(df1)) #column index to end
+vol_nvar <- vol_end - vol_start + 1
+
+# shift within df
+out_shift <- vol_start - 1
+
+#For loop
+dat <- df1
+out_mod <- vector('list', length(vol_nvar))
+i <- vol_start
+
+for (i in vol_start:vol_end){
+  raw_volume = colnames(dat)[i]
+
+mod_1 <- lm(get(raw_volume) ~ case_status,
+      na.action = na.exclude,
+      data=dat)
+
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+}
+
+
+library(broom)
+
+out_mod_summary <- summary(out_mod[[1]])
+out_mod_summary$coefficients %>% as_tibble()
+z <- tidy(mod_1, conf.int =T)[2,]
+z %>% mutate(region = names(out_mod[1]))
+
+tidy(out_mod[[1]])
+
+names(out_mod[1])
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(p.value) %>%
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>%
+  select(Region = "region", `Estimate` = "estimate", p = "p.value", )
+
+library(kableExtra)
+table <- knitr::kable(df1, digits = 10,
+  caption = title)
+
+kable_classic_2(table)
+
+```
+
+
+
+## Regression - AD+ vs AD - 
+```{r regression}
+df <- ashs_adjusted
+title <- c("Not Batch Corrected; divided by ICV (AD- = 0, AD+ = 1)")
+
+# Define comparison, i.e. control = 0, case = 1 
+df1 <- df %>%  select(-contains(c("misc", "meninges"))) %>%
+  filter(ad_present != "Control") %>% 
+  mutate(case_status = ifelse(ad_present == "LBD-AD", 0,
+                              ifelse(ad_present == "LBD+AD", 1,
+                                      "NA")))
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
+vol_end <- grep("right_phc$", colnames(df1)) #column index to end
+vol_nvar <- vol_end - vol_start + 1
+
+# shift within df
+out_shift <- vol_start - 1
+
+#For loop
+dat <- df1
+out_mod <- vector('list', length(vol_nvar))
+i <- vol_start
+
+for (i in vol_start:vol_end){
+  raw_volume = colnames(dat)[i]
+
+mod_1 <- lm(get(raw_volume) ~ case_status,
+      na.action = na.exclude,
+      data=dat)
+
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+}
+
+
+library(broom)
+
+out_mod_summary <- summary(out_mod[[1]])
+out_mod_summary$coefficients %>% as_tibble()
+z <- tidy(mod_1, conf.int =T)[2,]
+z %>% mutate(region = names(out_mod[1]))
+
+tidy(out_mod[[1]])
+
+names(out_mod[1])
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(p.value) %>%
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>%
+  select(Region = "region", `Estimate` = "estimate", p = "p.value", 
+         `S.E.` = "std.error", p = "p.value", `2.5% CI` = "conf.low", 
+         `97.5% CI` = "conf.high")
+
+library(kableExtra)
+table <- knitr::kable(df1,
+  caption = title)
+
+kable_classic_2(table)
+
+```
+
+
+
+
+# Batch corrected for scanner, unadjusted for ICV
+## Boxplots
+```{r boxplot}
 # check to make sure no shift in rows
-plot(y_covbat$left_anterior_hippocampus, ds1$left_anterior_hippocampus) #well correlated
+plot(y_covbat$left_anterior_hippocampus, ds2$left_anterior_hippocampus) #well correlated
 
-plot(y_covbat$left_anterior_hippocampus, rev(ds1$left_anterior_hippocampus)) #randomly correlated
+plot(y_covbat$left_anterior_hippocampus, rev(ds2$left_anterior_hippocampus)) #randomly correlated
 
-# bind y_covbat back to ds1
+# bind y_covbat back to ds2
 ds_covbat <-
-  ds1 %>% 
+  ds2 %>% 
   select(-(contains("dicom") | contains("left_") |
            contains("right_"))) %>% 
   cbind(y_covbat) %>% 
@@ -537,7 +1017,7 @@ ds_covbat <-
 
 #obtain order of regions by mean volume
 df_raw_vol <- ds_covbat %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>%
-  select(-contains(c("misc", "meninges", "icv", "sul"))) %>%
+  select(-contains(c("misc", "meninges", "sul"))) %>%
   pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>%
   mutate(ad_present = as.factor(ad_present))
 
@@ -581,28 +1061,29 @@ plot <-
 plot
 ```
 
+## Regression - Case vs Control
 
-# Regression with unadjusted volumes
-Is AD case status a predictor of volume?
+```{r regression}
+df <- ds_covbat
+title <- c("Batch Corrected Unadjusted Vols (Control = 0, Case = 1)")
 
-```{r regression using unadjusted vols, echo=TRUE}
-# Look at regression of case vs control
-ds_covbat1 <- ds_covbat %>%  select(-contains(c("misc", "meninges"))) %>%
+# Define comparison, i.e. control = 0, case = 1 
+df1 <- df %>%  select(-contains(c("misc", "meninges"))) %>%
   mutate(case_status = ifelse(diagnosis == "Normal", 0,
                               ifelse(diagnosis != "Normal", 1,
                                       "NA")))
 
 # Position of variables in data frame to be used in for loop
 # region raw volume
-vol_start <- grep("left_anterior_hippocampus$", colnames(ds_covbat1)) #column index to begin taking outcome vars
-vol_end <- grep("right_phc$", colnames(ds_covbat1)) #column index to end
+vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
+vol_end <- grep("right_phc$", colnames(df1)) #column index to end
 vol_nvar <- vol_end - vol_start + 1
 
 # shift within df
 out_shift <- vol_start - 1
 
 #For loop
-dat <- ds_covbat1
+dat <- df1
 out_mod <- vector('list', length(vol_nvar))
 i <- vol_start
 
@@ -638,15 +1119,224 @@ df <- rbind(df, z)
 }
 
 df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
-  arrange(estimate) %>%
+  arrange(p.value) %>%
   mutate(region = str_remove(region, "model_"),
          region = str_replace(region, "_", " ")) %>%
   select(Region = "region", `Estimate` = "estimate", p = "p.value")
 
 library(kableExtra)
 table <- knitr::kable(df1, digits = 4,
-  caption = 'Models of Combat Adjusted Subfield Volumes for Case vs Control')
+  caption = title)
 
 kable_classic_2(table)
 
 ```
+
+
+# Batch Corrected and volume adjusted (divided by ICV)
+```{r boxplot}
+# check to make sure no shift in rows
+plot(y_covbat$left_anterior_hippocampus, ds2$left_anterior_hippocampus) #well correlated
+
+plot(y_covbat$left_anterior_hippocampus, rev(ds2$left_anterior_hippocampus)) #randomly correlated
+
+# bind y_covbat back to ds2
+ds_covbat <-
+  ds2 %>% 
+  select(-(contains("dicom") | contains("left_") |
+           contains("right_"))) %>% 
+  cbind(y_covbat) %>% 
+  select(-y) %>% 
+  as.tibble()
+
+ds_covbat_adjusted <- ds_covbat[15:33] %>% transmute(./left_icv) %>% cbind(ds_covbat[1:14])
+
+#obtain order of regions by mean volume
+df_raw_vol <- ds_covbat_adjusted %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>%
+  select(-contains(c("misc", "meninges", "sul"))) %>%
+  pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>%
+  mutate(ad_present = as.factor(ad_present))
+
+df_raw_vol %>%
+  group_by(Region) %>%
+  summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol))
+
+df_raw_vol$Region <- recode_factor(df_raw_vol$Region,
+                           left_anterior_hippocampus= "L Ant Hip",
+                           right_anterior_hippocampus = "R Ant Hip",
+                           left_posterior_hippocampus = "L Post Hip",
+                           right_posterior_hippocampus = "R Post Hip",
+                           left_br36 = "L Br36",
+                           right_br36 = "R Br36",
+                           left_phc = "L PHC",
+                           right_phc = "R PHC",
+                           left_br35 = "L Br35",
+                           right_br35 = "R Br35",
+                           left_erc = "L ERC",
+                           right_erc = "R ERC")
+
+df_raw_vol$ad_present <- recode_factor(df_raw_vol$ad_present,
+                               Normal = "Control",
+                               `FALSE` = "LBD-AD",
+                               `TRUE` = "LBD+AD")
+
+
+plot <-
+  ggplot(df_raw_vol, aes(x = ad_present, y = Volume)) +
+  geom_boxplot() +
+  facet_wrap(.~Region, scales = "free") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Subregion Volumes, Unadjusted (After Batch Correction)",
+       y = "Volume (cm^3)",
+       x = "Case Status") +
+  font("y", size = 15) +
+  font("x", size = 15) +
+  theme(strip.text.x = element_text(size = 7)) +
+  geom_jitter(alpha = 0.2, size =1)
+
+plot
+```
+
+## Regression - Control vs Case
+```{r regression}
+df <- ds_covbat_adjusted
+title <- c("Batch Corrected divided by ICV (Control = 0, Case = 1)")
+
+# Define comparison, i.e. control = 0, case = 1 
+df1 <- df %>%  select(-contains(c("misc", "meninges"))) %>%
+  mutate(case_status = ifelse(diagnosis == "Normal", 0,
+                              ifelse(diagnosis != "Normal", 1,
+                                      "NA")))
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
+vol_end <- grep("right_phc$", colnames(df1)) #column index to end
+vol_nvar <- vol_end - vol_start + 1
+
+# shift within df
+out_shift <- vol_start - 1
+
+#For loop
+dat <- df1
+out_mod <- vector('list', length(vol_nvar))
+i <- vol_start
+
+for (i in vol_start:vol_end){
+  raw_volume = colnames(dat)[i]
+
+mod_1 <- lm(get(raw_volume) ~ case_status,
+      na.action = na.exclude,
+      data=dat)
+
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+}
+
+
+library(broom)
+
+out_mod_summary <- summary(out_mod[[1]])
+out_mod_summary$coefficients %>% as_tibble()
+z <- tidy(mod_1, conf.int =T)[2,]
+z %>% mutate(region = names(out_mod[1]))
+
+tidy(out_mod[[1]])
+
+names(out_mod[1])
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(p.value) %>%
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>%
+  select(Region = "region", `Estimate` = "estimate", p = "p.value", 
+         `S.E.` = "std.error", `2.5% CI` = "conf.low", `97.5% CI` = "conf.high")
+
+library(kableExtra)
+table <- knitr::kable(df1,
+  caption = title)
+
+kable_classic_2(table)
+
+```
+
+## Regression - Batch corrected and divided by ICV - AD+ vs AD - 
+```{r regression using unadjusted vols, echo=TRUE}
+df <- ds_covbat_adjusted
+title <- c("Batch Corrected divided by ICV (AD- = 0, AD+ = 1)")
+
+# Define comparison, i.e. control = 0, case = 1 
+df1 <- df %>%  select(-contains(c("misc", "meninges"))) %>%
+  filter(ad_present != "Control") %>% 
+  mutate(case_status = ifelse(ad_present == "LBD-AD", 0,
+                              ifelse(ad_present == "LBD+AD", 1,
+                                      "NA")))
+
+# Position of variables in data frame to be used in for loop
+# region raw volume
+vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
+vol_end <- grep("right_phc$", colnames(df1)) #column index to end
+vol_nvar <- vol_end - vol_start + 1
+
+# shift within df
+out_shift <- vol_start - 1
+
+#For loop
+dat <- df1
+out_mod <- vector('list', length(vol_nvar))
+i <- vol_start
+
+for (i in vol_start:vol_end){
+  raw_volume = colnames(dat)[i]
+
+mod_1 <- lm(get(raw_volume) ~ case_status,
+      na.action = na.exclude,
+      data=dat)
+
+out_mod[[i-out_shift]] <- mod_1
+names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
+}
+
+
+library(broom)
+
+out_mod_summary <- summary(out_mod[[1]])
+out_mod_summary$coefficients %>% as_tibble()
+z <- tidy(mod_1, conf.int =T)[2,]
+z %>% mutate(region = names(out_mod[1]))
+
+tidy(out_mod[[1]])
+
+names(out_mod[1])
+
+df <- NULL
+
+for (i in 1:length(out_mod)) {
+z <- tidy(out_mod[[i]], conf.int =T)[2,]
+z <- z %>% mutate(region = names(out_mod[i]))
+df <- rbind(df, z)
+}
+
+df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
+  arrange(p.value) %>%
+  mutate(region = str_remove(region, "model_"),
+         region = str_replace(region, "_", " ")) %>%
+  select(Region = "region", `Estimate` = "estimate", p = "p.value")
+
+library(kableExtra)
+table <- knitr::kable(df1,
+  caption = title)
+
+kable_classic_2(table)
+
+```
+
+# left + right divided by ICV 
