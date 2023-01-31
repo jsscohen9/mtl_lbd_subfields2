@@ -2,8 +2,12 @@
 title: "Hippocampal Subfield Analysis"
 author: "Jesse Cohen"
 date: "`r Sys.Date()`"
-output: ioslides_presentation
-  slide_theme: compact
+output: html_document
+params:
+  data: 
+    label: "Input dataset:"
+    value: objects/ashs_icv_adjusted.RDS
+    input: file
 ---
 
 ```{r setup, include=FALSE, }
@@ -61,57 +65,17 @@ ANTsCT cortical thickness pipeline 549 successful (312 unique subjects)
 source(file = here("munge.R"))
 ```
 
-<!-- ## Confirm AD_present is consistent for each INDDID -->
-
-<!-- ```{r confirm concordant ad_present} -->
-
-<!-- # Take biomarkers dataframe in which each row has single biomarker test for each INDDID  -->
-
-<!-- # and make table with ad present or absent for each INDDID -->
-
-<!-- df_ad_present <-  -->
-
-<!--   biomarkers %>%  -->
-
-<!--   select(INDDID, ad_present, diagnosis, ad_present, abc, PET_read, tau_abeta42_ratio, CSFDate) %>%  -->
-
-<!--   filter(is.na(ad_present)==F) %>% #remove any rows with NAs -->
-
-<!--   group_by(INDDID) %>%  -->
-
-<!--   summarise(ad_dx_unique = mean(ad_present)) #if the mean is not 0 or 1 then it has conflicting ad_present  -->
-
-<!-- #remove individuals with conflicting ad_present -->
-
-<!-- df_ad_present <- -->
-
-<!--   df_ad_present %>%  -->
-
-<!--   filter(ad_dx_unique == 0 | ad_dx_unique == 1) %>%  -->
-
-<!--   mutate(ad_present = ifelse(ad_dx_unique == 1, TRUE,  -->
-
-<!--                              ifelse(ad_dx_unique == 0, FALSE, -->
-
-<!--                                     NA))) %>%  -->
-
-<!--   select(INDDID, ad_present) -->
-
-<!-- d <- d %>% filter(INDDID %in% df_ad_present$INDDID | diagnosis == "Normal") #include only cases with clear ad_present status, as well as Normal controls -->
-
-<!-- remove(df_ad_present) -->
-
-<!-- ``` -->
 
 ```{r initialize}
 # input
-mri_selected_ashs <- read_rds(here("objects/mri_selected_ashs_all.RDS"))
+ds <- read_rds(params$data)
 
 # Initialise the dataset as per the template.
-dsname <- "mri_selected_ashs"
-ds     <- get(dsname)
+file_name <- (params$data)
+dsname <- str_extract(string = file_name,pattern = regex("(?<=objects/)(.*)(?=.RDS)"))
 
 ds %>% sample_frac()
+
 ```
 
 ## ASHS data on cases and controls
@@ -119,260 +83,6 @@ ds %>% sample_frac()
 ```{r , include=TRUE}
 DT::datatable(ds)
 ```
-
-```{r export ids/sessions, include=FALSE}
-qc_ids <- mri_selected_ashs %>% select(subject = INDDID, 
-                                       session = FlywheelSessionLabel)
-
-write_delim(qc_ids, file = here("qc_ids.txt"))
-```
-
-```{r Normalize variable names}
-# Normalize variable names automatically
-# Capture the original variable names for use in plots.
-
-vnames <- names(ds)
-
-# Normalise the variable names.
-
-ds %<>% clean_names(numerals="right")
-
-# Confirm the results are as expected.
-
-names(ds)
-
-# Index the original variable names by the new names.
-
-names(vnames) <- names(ds)
-
-vnames
-
-# Note the available variables.
-
-vars <- names(ds) %T>% print()
-
-```
-
-```{r Character variables }
-# Identify the character variables by index.
-
-ds %>%
-  sapply(is.character) %>%
-  which() %T>%
-  print() ->
-chari
-
-# Identify the character variables by name.
-
-ds %>% 
-  names() %>% 
-  '['(chari) %T>% 
-  print() ->
-charc
-
-# Observe the unique levels.
-
-ds[charc] %>% sapply(unique)
-
-# How many diagnoses are represented in the dataset.
-
-ds$diagnosis %>% 
-  unique() %>%
-  length()
-
-# Here is a list of diagnoses and their frequencies in the dataset
-ds$diagnosis %>%
-  table()
-
-```
-
-```{r}
-# Convert character to numeric where needed
-# Identify the vairables to process.
-
-cvars <- c("session_year")
-
-# Check the current class of the variables.
-
-ds[cvars] %>% sapply(class)
-```
-
-```{r}
-# Convert to numeric.
-
-ds[cvars] %<>% sapply(as.numeric)
-
-# Review some random values.
-
-sample(ds$session_year, 10)
-```
-
-```{r}
-# Convert character to factor where needed
-# Review the distribution of observations across levels.
-
-ds %>%
-  select(diagnosis, sex, race, ad_present) %>%
-  sapply(table)
-
-```
-
-```{r}
-# Note the names of the desired variables.
-
-ds %>% 
-  select(diagnosis, sex, race, ad_present) %>% 
-  names() %T>%
-  print() ->
-vnames
-
-# Convert these variables from character to factor.
-
-ds[vnames] %<>% 
-  lapply(factor, ordered = FALSE) %>% 
-  data.frame() %>% 
-  as_tibble()
-
-# Confirm they are now factors.
-
-ds[vnames] %>% sapply(class)
-```
-
-```{r}
-# Verify the distribution has not changed.
-
-ds %>%
-  select(all_of(vnames)) %>%
-  sapply(table)
-
-```
-
-```{r Numeric Variables}
-ds %>%
-  sapply(is.numeric) %>%
-  which() %>%
-  names %T>%
-  print() ->
-numi
-
-ds[numi] %>% 
-  summary()
-```
-
-```{r}
-# Note the identifiers.
-
-id <- c("inddid", "session_date", "flywheel_session_label")
-
-# Initialise ignored variables: identifiers.
-
-ignore <- c(id)
-
-# Heuristic for candidate indentifiers to possibly ignore.
-
-ds[vars] %>%
-  sapply(function(x) x %>% unique() %>% length()) %>%
-  equals(nrow(ds)) %>%
-  which() %>%
-  names() %T>%
-  print() ->
-ids
-
-```
-
-```{r}
-# Once we have identified all of the variables to ignore we remove them from our list of variables to use.
-# Check the number of variables currently.
-
-length(vars)
-
-# Remove the variables to ignore.
-
-vars <- setdiff(vars, ignore)
-
-# Confirm they are now ignored.
-
-length(vars)
-```
-
-<!-- # Data Exploration -->
-
-```{r A random sample of the dataset}
-ds %>% sample_frac()
-```
-
-```{r Count groups}
-ds %>% count(diagnosis)
-
-```
-
-```{r Constants}
-# Identify variables that have a single value.
-
-ds %>%
-  select(all_of(vars)) %>%
-  sapply(function(x) all(x == x[1L])) %>%
-  which() %>%
-  names() %T>%
-  print() ->
-constants
-
-```
-
-Correlated variables
-
-```{r, include=FALSE}
-# For the numeric variables generate a table of correlations
-
-ds %>%
-  correlate() %>%
-  shave() %>%
-  fashion()
-
-ds %>%
-  correlate() %>%
-  rearrange() %>%
-  rplot()
-
-ds %>%
-  corrr::correlate() %>%
-  shave() %>%
-  stretch() %>%
-  filter(abs(r) > 0.90)
-
-ds %>%
-  correlate() %>%
-  rearrange() %>% 
-  focus(age_at_mri) 
-
-```
-
-```{r, include=TRUE}
-ds %>%
-  correlate() %>%
-  network_plot()
-```
-
-```{r Missing values}
-# Count the number of missing values.
-
-ds %>% is.na() %>% sum()
-
-# No missing values in the first two columns (INDDID and diagnosis)
-
-ds[1:2] %>% is.na() %>% sum()
-
-ds$education %<>% na.roughfix()
-
-# Confirm that no missing values remain.
-
-ds %>% is.na() %>% sum()
-```
-
-```{r Save cleaned dataframe for future use}
-saveRDS(ds, file = here("objects/ashs_clean.RDS"))
-```
-
 # Results
 
 ## Density Plots numerical variables
@@ -406,21 +116,18 @@ ds %>%
 ## Demographics and Clinical Data
 
 ```{r Table 1}
-#cleaned unadjusted data:
-ds
-
 #reorder levels for table display
-any_na(ds$diagnosis)
+naniar::any_na(ds$diagnosis)
 ds$diagnosis <- factor(ds$diagnosis, 
                                  levels = c("DLB", "PDD", "PD", "Normal"))
-any_na(ds$diagnosis)
+naniar::any_na(ds$diagnosis)
 
-any_na(ds$race)
+naniar::any_na(ds$race)
 ds$race <- fct_collapse(ds$race, 
                         White = "White", 
                         `Non-White or Unknown` = c("More than One Race", "Black or African American",
                                                                        "Asian", "Unknown or Not Reported"))
-any_na(ds$race)
+naniar::any_na(ds$race)
 
 fct_lump_n(ds$race, n=2, other_level = "Other")
 
@@ -434,7 +141,18 @@ ds$ad_present <- factor(ds$ad_present,
 
 ds$ad_present %>% table()
 
+ds$ad_marker %<>% as.character() %>% replace_na("Control") %>% as.factor()
+ds$ad_marker <- factor(ds$ad_marker,
+                          levels = c("autopsy", "pet", "csf", "Control"),
+                          labels = c("Autopsy", "PET", "CSF", "Control"))
 
+  
+
+# ds$diagnosis %>% table()
+# ds$diagnosis <- factor(ds$diagnosis,
+#                        levels = c("DLB", "PDD", "PD", "Normal"),
+#                        labels = c("DLB", "PDD", "PD", "Control"))
+# ds$diagnosis %>% table()
 ```
 
 ### Table 1: Cases + Controls
@@ -449,10 +167,11 @@ label(ds$sex) <- "Sex Assigned at Birth"
 units(ds$education) <- "years"
 label(ds$education) <- "Education"
 label(ds$race) <- "Self-Reported Race"
+label(ds$ad_marker) <- "AD Diagnostic"
 
 caption <- c("")
 
-table1(~ age_at_mri + sex + race + education + diagnosis| ad_present, data = ds, topclass="Rtable1-grid", )
+table1(~ age_at_mri + sex + race + education + diagnosis + ad_marker| ad_present, data = ds, topclass="Rtable1-grid", )
 
 ```
 
@@ -466,15 +185,307 @@ table1(~ sex + race + age_at_mri + diagnosis + education | ad_present, data = df
 
 ```
 
-## Figure 1: Subregion Volumes, unadjusted
+## Ancova of controls and cases 
 
-```{r subregion vols raw, include = FALSE}
+```{r}
+#select adjusted volumes 
+raw_start <- grep("left_anterior_hippocampus$", colnames(ds)) #column index to begin taking outcome vars
+raw_end <- grep("left_icv$", colnames(ds)) #column index to end
+
+ds_icv_adj <- ds %>% select(-c(raw_start:raw_end))
+
+```
+
+```{r}
+library(ggpubr)
+library(tidyverse)
+library(broom)
+library("lattice")
+library(multcomp)
+
+ds_icv_adj <- read_rds("objects/hippo_icv_adjusted.RDS")
+
+```
+# both hippocampi
+
+```{r}
+# Load and prepare the data
+ds_icv_adj <- ds_icv_adj %>% dplyr::select(everything(), 
+                                           b_hippo = both_hippocamp_adjusted)
+
+ggplot(ds_icv_adj) +
+  aes(x = ad_present, y = b_hippo, color = ad_present) +
+  geom_jitter() +
+  theme(legend.position = "none")
+
+
+# check normality
+res_aov <- aov(b_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+par(mfrow = c(1, 2)) # combine plots
+
+# histogram
+hist(res_aov$residuals)
+
+# Equality of variances - homogeneity
+
+# Boxplot
+boxplot(b_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+# Dotplot
+
+dotplot(b_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+group_by(ds_icv_adj, ad_present) %>%
+  summarise(
+    mean = mean(b_hippo, na.rm = TRUE),
+    sd = sd(b_hippo, na.rm = TRUE)
+  )
+
+
+# Are hippocampal volumes different between the three groups 
+
+# Anova
+res_aov <- aov(b_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+summary(res_aov)
+
+
+# Tukey HSD test:
+post_test <- glht(res_aov,
+  linfct = mcp(ad_present = "Tukey")
+)
+
+summary(post_test)
+
+```
+
+# linear model 
+```{r}
+ds_icv_adj %<>% filter(ad_present != "Normal")
+
+b_hip_mod <- lm(b_hippo ~ ad_present,
+      na.action = na.exclude,
+      data=ds_icv_adj)
+
+summary(b_hip_mod)
+
+
+b_hip_mod <- lm(b_hippo ~ ad_present + sex + age_at_mri + education + diagnosis,
+      na.action = na.exclude,
+      data=ds_icv_adj)
+
+summary(b_hip_mod)
+
+```
+
+# boxplot of bilateral hippocampal volume
+```{r}
+my_comparisons <- list( c("Control", "LBD-AD"), 
+                        c("Control", "LBD+AD"), 
+                        c("LBD-AD", "LBD+AD") )
+
+p2 <- ggboxplot(ds_icv_adj, x = "ad_present", y = "b_hippo",
+          color = "ad_present", palette = "jco",
+          xlab = FALSE,
+          ylab = "Hippocampal Volume (%ICV)",
+          add = "jitter", add.params = list(alpha = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, 
+                     label = "p.signif") + # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 0.65, method = "anova")   # Add global p-value
+
+ggpar(p2, legend = "none", 
+      title = "Figure 1: Bilateral Hippocampal Volume in LBD +/- AD")
+  
+```
+
+
+
+## left hippocampus
+```{r}
+# Load and prepare the data
+ds_icv_adj <- ds_icv_adj %>% dplyr::select(everything(), 
+                                           l_hippo = left_full_hippocampus_adjusted)
+
+ggplot(ds_icv_adj) +
+  aes(x = ad_present, y = l_hippo, color = ad_present) +
+  geom_jitter() +
+  theme(legend.position = "none")
+
+
+# check normality
+res_aov <- aov(l_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+par(mfrow = c(1, 2)) # combine plots
+
+# histogram
+hist(res_aov$residuals)
+
+# Equality of variances - homogeneity
+
+# Boxplot
+boxplot(l_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+# Dotplot
+
+dotplot(l_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+group_by(ds_icv_adj, ad_present) %>%
+  summarise(
+    mean = mean(l_hippo, na.rm = TRUE),
+    sd = sd(l_hippo, na.rm = TRUE)
+  )
+
+
+# Are hippocampal volumes different between the three groups 
+
+# Anova
+res_aov <- aov(l_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+summary(res_aov)
+
+
+# Tukey HSD test:
+post_test <- glht(res_aov,
+  linfct = mcp(ad_present = "Tukey")
+)
+
+summary(post_test)
+
+```
+
+# linear model 
+```{r}
+ds_icv_adj %<>% filter(ad_present != "Normal")
+
+l_hip_mod <- lm(l_hippo ~ ad_present,
+      na.action = na.exclude,
+      data=ds_icv_adj)
+
+summary(l_hip_mod)
+
+
+l_hip_mod <- lm(l_hippo ~ ad_present + sex + age_at_mri + education + diagnosis,
+      na.action = na.exclude,
+      data=ds_icv_adj)
+
+summary(l_hip_mod)
+
+```
+
+
+
+## Repeat for R hippocampus:
+```{r}
+ds_icv_adj <- read_rds("objects/hippo_icv_adjusted.RDS")
+
+# Load and prepare the data
+ds_icv_adj <- ds_icv_adj %>% dplyr::select(inddid, 
+                                    r_hippo = right_full_hippocampus_adjusted,
+                                    everything())
+
+ggplot(ds_icv_adj) +
+  aes(x = ad_present, y = r_hippo, color = ad_present) +
+  geom_jitter() +
+  theme(legend.position = "none")
+
+
+# check normality
+res_aov <- aov(r_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+par(mfrow = c(1, 2)) # combine plots
+
+# histogram
+hist(res_aov$residuals)
+
+# Equality of variances - homogeneity
+
+# Boxplot
+boxplot(r_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+# Levene's test
+library(car)
+
+leveneTest(r_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+library(dplyr)
+
+group_by(ds_icv_adj, ad_present) %>%
+  summarise(
+    mean = mean(r_hippo, na.rm = TRUE),
+    sd = sd(r_hippo, na.rm = TRUE)
+  )
+
+
+# Are hippocampal volumes different betweent the three groups 
+
+# Anova
+res_aov <- aov(r_hippo ~ ad_present,
+  data = ds_icv_adj
+)
+
+summary(res_aov)
+
+#post hoc
+library(multcomp)
+
+# Tukey HSD test:
+post_test <- glht(res_aov,
+  linfct = mcp(ad_present = "Tukey")
+)
+
+summary(post_test)
+```
+# linear model 
+```{r}
+r_hip_mod <- lm(r_hippo ~ ad_present+ sex + age_at_mri + education + diagnosis,
+      na.action = na.exclude,
+      data=ds_icv_adj)
+
+summary(r_hip_mod)
+
+
+r_hip_mod <- lm(r_hippo ~ ad_present,
+      na.action = na.exclude,
+      data=ds_icv_adj)
+
+summary(r_hip_mod)
+
+```
+## Figure 1: Subregion Volumes
+
+```{r subregion vols, include = FALSE}
 #obtain order of regions by mean volume 
 df_raw_vol <- ds %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>% 
   select(-contains(c("MISC", "Meninges", "icv", "sul"))) %>% 
   pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>% 
   mutate(ad_present = as.factor(ad_present))
 
+
+vol_start <- grep("left_anterior_hippocampus$", colnames(ashs_clean)) #column index to begin taking outcome vars
+vol_end <- grep("left_icv$", colnames(ashs_clean)) #column index to end
 df_raw_vol %>% 
   group_by(Region) %>% 
   summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol)) 
@@ -703,6 +714,8 @@ cases_df %>%
   arrange(r)
 
 ```
+
+
 
 ```{r, include=FALSE}
 # Is AD case status a predictor of volume  

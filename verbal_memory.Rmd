@@ -29,10 +29,571 @@ library(DT)
 rm(list = ls())
 ```
 # Add BNT here - (confrontation naming)
+
+# analysis of only both hippocampi summed
 ```{r Data Import Template, include=FALSE}
 # input
 verbal_testing_data <- read_rds(here("objects/vlt_raw.RDS"))
-ashs_clean <- read_rds("objects/ashs_adjusted_icv.RDS") #changed to adjusted
+ashs_clean <- read_rds("objects/hippo_icv_adjusted.RDS") #changed to adjusted
+
+# Initialise the dataset as per the template.
+dsname <- "verbal_testing_data"
+ds     <- get(dsname)
+
+ds %>% sample_frac()
+
+glimpse(ds)
+```
+
+# VLT data import
+```{r }
+datatable(ds)
+```
+
+```{r Normalize variable names automatically}
+# Normalise the variable names.
+
+ds %<>% clean_names(numerals="right")
+
+# Confirm the results are as expected.
+
+names(ds)
+
+# Note the available variables.
+
+vars <- names(ds)
+
+```
+
+```{r}
+# Note the identifiers.
+
+id <- c("inddid", "inddid_1", "test_date", "visit_id")
+
+# Initialise ignored variables: identifiers.
+
+ignore <- c(id)
+
+```
+
+
+```{r Character variables }
+# Identify the character variables by index.
+
+ds %>%
+  sapply(is.character) %>%
+  which()  ->
+chari
+
+# Identify the character variables by name.
+
+ds %>% 
+  names() %>% 
+  '['(chari) ->
+charc
+
+# Ignore character variables
+
+ignore <- union(ignore, charc)
+
+```
+
+```{r}
+#Once we have identified all of the variables to ignore we remove them from our list of variables to use.
+
+# Check the number of variables currently.
+
+length(vars)
+
+# Remove the variables to ignore.
+
+vars <- setdiff(vars, ignore)
+
+# Confirm they are now ignored.
+
+length(vars)
+```
+
+```{r Numeric Variables}
+ds[vars] %>%
+  sapply(is.numeric) %>%
+  which() %>%
+  names ->
+numi
+
+ds[numi] %>% 
+  summary()
+```
+
+
+```{r Data Exploration, results = TRUE}
+#A random sample of the dataset:
+
+ds %>% sample_frac()
+```
+
+
+# Verbal memory
+Caveats with combining the two scores: as opposed to HVLT, PVLT looks at effect of distractors - after trial_ 5 adds a distractor list. Will z-score within each test within domains of learning (immediate recall), delayed recall (including "rapid forgetting index" of number on delayed recall:best immediate recall score), recognition (recognition discrimination index).
+- Need to show consistent relationships between domains in HVLT vs PVLT in order to legitimize combining them 
+- will use score closest in time to MRI that occurs after MRI, since in mediation analysis the cognitive test has to come after the MRI  
+
+Steps:
+1. find VLT closest to MRI date but occurring after
+2. z-scores for each domain:
+PVLT learning  - 1-5 trial_s total. also z-scores for each individual trial_ and then average those z scores
+delayed - (Trial 9)
+recognition - recognition discrimination score
+
+HVLT learning - Total recall score. also z-scores for each individual trial_ then average those z scores
+delayed - including Rapid forgetting index (%retained - measures what is lost between highest score in immediate recall and delayed recall)
+recognition - recognition discrimination index 
+
+--> subsequently can include MOCA/MMSE z-scores in the final model to adjust for global cognition
+
+
+```{r verbal memory}
+#find verbal memory test closest to mri date for each subject
+
+verbal_date <- ashs_clean %>% 
+  left_join(ds, by="inddid") %>%
+  filter(diagnosis != "Normal") %>% 
+  mutate(session_date = as.Date(session_date, format = '%Y%m%d'))
+
+verbal_date %<>% 
+  select(inddid, diagnosis, ad_present, session_date, hvlt_date = test_date, pvlt_date = `test_date_1`, dplyr::all_of(numi)) %>%
+  filter(is.na(phl_recognition_discrimin) == F) %>% #remove individuals who couldn't complete the test
+  pivot_longer(cols = c("hvlt_date", "pvlt_date"), names_to = "test", values_to = "test_date") %>% 
+  mutate(intvl_test = as.numeric(as.Date(test_date) - as.Date(session_date))/365) %>% 
+  select(inddid, diagnosis, ad_present, session_date, intvl_test, test, test_date) %>% distinct() %>% 
+  filter(is.na(intvl_test)==F) %>% 
+  filter(intvl_test > 0) %>% 
+  group_by(inddid) %>% 
+  filter(intvl_test == min(intvl_test, na.rm = T)) %>%
+  ungroup() 
+
+```
+
+
+## HVLT score normalization, all available subjects/tests
+```{r , results=TRUE}
+# correlation of uncorrected volumes with HVLT scores
+
+
+# HVLT learning - Total recall score. also z-scores for each individual trial_ then average those z scores
+# delayed - including Rapid forgetting index (%retained - measures what is lost between highest score in immediate recall and delayed recall)
+# recognition - recognition discrimination index 
+
+# Subset HVLT testing
+hvlt <- ds %>% select(inddid, test_date, ageat_test, dplyr::all_of(dplyr::contains("hvlt"))) %>% 
+  drop_na() %>% 
+  distinct()
+  
+# First calculate z-scores for all cases (subsequently will look at just those closest to MRI)
+# Select hvlt tests to use and add columns for max immediate recall score, "rapid forgetting index" (delayed recall score/max immediate recall score)
+data <- hvlt %>% 
+  select(inddid, test_date, hvltrt_1, hvltrt_2, hvltrt_3, hvltrt_tot_score, hvltrdly, hvltrecdist_score) %>% 
+  rowwise() %>% 
+  mutate(immediate_max = max(hvltrt_1, hvltrt_2, hvltrt_3)) %>% 
+  mutate(remember_index = hvltrdly/immediate_max)
+
+z_scores <- sapply(data[,-(1:2)], function(data) (data-mean(data, na.rm = T))/sd(data, na.rm = T))
+
+#rename z_score column names 
+original_cols <- colnames(z_scores) 
+colnames(z_scores) <- paste0(original_cols, "_z_score")
+
+data <- cbind(data, z_scores)
+ 
+# #rejoin to original df
+# hvlt_normed <- verbal_date %>% filter(test == "hvlt_date") %>% left_join(., data) %>% as_tibble()
+
+#create new column for mean of immediate recall z-scores
+hvlt_normed <- data %>% 
+  rowwise() %>% 
+  mutate(immediate_z_score_mean = mean(hvltrt_1_z_score, hvltrt_2_z_score, hvltrt_3_z_score, na.rm = T)) 
+  
+
+hvlt_normed %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  select(contains(c("trt_1_z", "dly_z", "recdist_score_z"))) %>% 
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free") + 
+    stat_boxplot(geom = "errorbar", width = 0.5) + # In separate panels
+    geom_density()              +            # boxplot
+  theme(strip.text.x = element_text(size = 10))+
+  theme(axis.text.x = element_text(size = 10)) +
+  ggtitle("All HVLT scores")
+
+```
+
+## HVLT Score Heatmap
+```{r hvlt heatmap}
+### Data
+df <- hvlt_normed %>% select(contains("z_score"))
+
+### Let's Plot
+hvlt_heatmap <- heatmaply_cor(x = cor(df),
+              xlab = "Features",
+              ylab = "Features",
+              k_col = 2,
+              k_row = 2,
+              main = "HVLT Z-scores")
+
+hvlt_heatmap
+```
+
+
+## PVLT score normalization, all available subjects/tests
+```{r PVLT , results=TRUE}
+# PVLT
+# Subset PVLT testing
+pvlt <- ds %>% select(inddid, test_date_1, ageat_test, dplyr::all_of(dplyr::contains("phl"))) %>% 
+  replace_with_na(replace = list("<NA>")) %>% 
+  filter(!is.na(test_date_1)) %>% 
+  distinct()
+
+# #remove individuals who couldn't complete the test
+# pvlt <- pvlt %>% filter(is.na(phl_recognition_discrimin)==F)
+
+data <- pvlt %>% 
+  select(inddid, test_date_1, ageat_test, phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5,
+         phl_correct_15total, phl_correct_trial_9, phl_recognition_discrimin) %>% 
+  filter(is.na(phl_recognition_discrimin)==F) %>% 
+  rowwise() %>% 
+  mutate(immediate_max = max(phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5)) %>% 
+  mutate(remember_index = phl_correct_trial_9/immediate_max) 
+
+z_scores <- sapply(data[,-(1:3)], function(data) (data-mean(data))/sd(data))
+  
+#rename z_score column names 
+original_cols <- colnames(z_scores) 
+colnames(z_scores) <- paste0(original_cols, "_z_score")
+
+data <- cbind(data, z_scores)
+# 
+# #rejoin to original df
+# pvlt_normed <- verbal_date %>% filter(test == "pvlt_date") %>%
+# left_join(., data) %>% as.tibble()
+
+#create new column for mean of immediate recall z-scores
+pvlt_normed <- data %>% 
+  rowwise() %>% 
+  mutate(immediate_z_score_mean = mean(phl_correct_trial_1_z_score, phl_correct_trial_2_z_score, phl_correct_trial_3_z_score, phl_correct_trial_4_z_score, phl_correct_trial_5_z_score)) 
+
+
+pvlt_normed %>%
+  keep(is.numeric) %>%                     # Keep only numeric columns
+  select(contains(c("trial_1_z", "trial_9_z", "remember_index_z"))) %>% 
+  gather() %>%                             # Convert to key-value pairs
+  ggplot(aes(value)) +                     # Plot the values
+    facet_wrap(~ key, scales = "free") + 
+    stat_boxplot(geom = "errorbar", width = 0.5) + # In separate panels
+    geom_density()              +            # boxplot
+  theme(strip.text.x = element_text(size = 10))+
+  theme(axis.text.x = element_text(size = 10)) +
+  ggtitle( "All PVLT scores")
+```
+
+```{r}
+### Data
+df <- pvlt_normed %>% select(contains("z_score"))
+
+### Let's Plot
+pvlt_heatmap <- heatmaply_cor(x = cor(df),
+              xlab = "Features",
+              ylab = "Features",
+              k_col = 3,
+              k_row = 3,
+              main = "PVLT Z-scores")
+
+
+pvlt_heatmap
+
+pvlt_normed %>% select(ageat_test,
+  p_1 = phl_correct_trial_1_z_score,
+  p_total = phl_correct_15total_z_score,
+  p_recall = remember_index_z_score,
+  p_recog = phl_recognition_discrimin_z_score) %>% 
+  correlate() %>%
+  network_plot()
+```
+
+```{r }
+# Create a heatmap of individuals with both pvlt and hvlt.
+# Select a single score for total, delay, memory, and recall
+ds_h <- hvlt_normed %>% select(inddid, test_date,
+                       h_1 = hvltrt_1_z_score, 
+                       h_total = hvltrt_tot_score_z_score,
+                       h_recall = remember_index_z_score,
+                       h_recog = hvltrecdist_score_z_score)
+
+ds_p <- pvlt_normed %>% select(inddid, test_date_1,
+                               p_1 = phl_correct_trial_1_z_score,
+                               p_total = phl_correct_15total_z_score,
+                               p_recall = remember_index_z_score,
+                               p_recog = phl_recognition_discrimin_z_score)
+
+# Select ids with both tests completed at least once
+both_vlt <- intersect(hvlt_normed$inddid, pvlt_normed$inddid)
+
+ds_z <- 
+  ds_h %>% full_join(ds_p) %>% 
+  filter(inddid %in% both_vlt) %>% 
+  mutate(date_diff = abs(as.numeric(test_date - test_date_1)/365)) 
+
+df <- ds_z %>% 
+  group_by(inddid) %>% 
+  filter(date_diff == min(date_diff)) %>% 
+  ungroup(inddid) %>% 
+  select(-c(inddid, test_date, test_date_1, date_diff))
+
+
+### Let's Plot
+combo_heatmap <- heatmaply_cor(x = cor(df),
+              xlab = "Features",
+              ylab = "Features",
+              k_col = 3,
+              k_row = 3,
+              main = "VLT Z-scores")
+
+combo_heatmap
+```
+
+
+# Correlation of HVLT with volumes
+```{r}
+hvlt_ashs <-
+  verbal_date %>% 
+  filter(test == "hvlt_date") %>% 
+  left_join(ds_h, by = c(inddid = "inddid", test_date = "test_date")) %>% 
+  distinct() %>% 
+  left_join(ashs_clean)
+
+ignore <- c("test_date", "yob", "intvl_test", "session_year")
+
+hvlt_ashs %<>% 
+  select(-contains(c("misc", "sul", "meninges")),
+         -any_of(ignore))
+# 
+# vnames <- quo(c("L Ant Hip" = left_anterior_hippocampus,
+# "R Ant Hip" = right_anterior_hippocampus,
+# "L Post Hip" = left_posterior_hippocampus,
+# "R Post Hip" = right_posterior_hippocampus,
+# "L Br36" = left_br_36,
+# "R Br36" = right_br_36,
+# "L PHC" = left_phc,
+# "R PHC" = right_phc,
+# "L Br35" = left_br_35,
+# "R Br35" = right_br_35,
+# "L ERC" = left_erc,
+# "R ERC" = right_erc,
+# "ICV" = left_icv))
+
+# hvlt_ashs %<>% rename(!!vnames)
+
+p <- hvlt_ashs %>%
+  correlate() %>%
+  rearrange() %>%
+  shave() %>% 
+  rplot() 
+  
+p + guides(x = guide_axis(n.dodge = 2))
+
+hvlt_ashs %>%
+  correlate() %>%
+  rearrange() %>% 
+  focus(contains("p_")) 
+
+hvlt_ashs %>%
+  corrr::correlate() %>%
+  shave() %>%
+  stretch() %>%
+  filter(abs(r) > 0.60) %>% 
+  arrange(desc(r))
+
+hvlt_ashs %>%
+  correlate() %>%
+  network_plot()
+
+
+# Correlation plots
+
+h_long <- hvlt_ashs %>% 
+  select(-h_1) %>% 
+  pivot_longer(cols = c("h_total", "h_recall", "h_recog"),
+               names_to = "test_component",
+                           values_to = "z_score") %>% 
+  pivot_longer(cols = contains(c("hippocamp_adjusted")),
+               names_to = "region",
+               values_to = "vol")
+
+h_hip <- h_long %>% filter(stringr::str_detect(region, "hip"))
+h_br36 <- h_long %>% filter(stringr::str_detect(region, "Br36"))
+h_br35 <- h_long %>% filter(stringr::str_detect(region, "Br35"))
+h_phc <- h_long %>% filter(stringr::str_detect(region, "PHC"))
+
+vol_vlt_cor <- function(long_df) {
+
+ggscatter(long_df, x = "vol", y = "z_score",
+          facet.by = c("region", "test_component"),
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Volume", 
+          ylab = "Z-score", 
+          title = "Memory and MTL Subfields")
+   
+}
+
+```
+
+```{r}
+ggscatter(h_hip, x = "vol", y = "z_score",
+          facet.by = c("region", "test_component"),
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Volume (% ICV)", 
+          ylab = "Z-score", 
+          title = "Memory and MTL Subfields") 
+```
+
+# Correlation of PVLT with volumes
+```{r correlation of VLT with subfield volumes}
+pvlt_ashs <-
+  verbal_date %>% 
+  filter(test == "pvlt_date") %>% 
+  left_join(ds_p, by = c(inddid = "inddid", test_date = "test_date_1")) %>% 
+  distinct() %>% 
+  left_join(ashs_clean)
+
+ignore <- c("test_date", "yob", "intvl_test", "session_year", "left_icv_adjusted")
+
+pvlt_ashs %<>% 
+  select(-contains(c("misc", "sul", "meninges")),
+         -any_of(ignore))
+# 
+# vnames <- quo(c("L Ant Hip" = left_anterior_hippocampus,
+# "R Ant Hip" = right_anterior_hippocampus,
+# "L Post Hip" = left_posterior_hippocampus,
+# "R Post Hip" = right_posterior_hippocampus,
+# "L Br36" = left_br_36,
+# "R Br36" = right_br_36,
+# "L PHC" = left_phc,
+# "R PHC" = right_phc,
+# "L Br35" = left_br_35,
+# "R Br35" = right_br_35,
+# "L ERC" = left_erc,
+# "R ERC" = right_erc,
+# "ICV" = left_icv))
+# 
+# pvlt_ashs %<>% rename(!!vnames)
+
+p <- pvlt_ashs %>%
+  correlate() %>%
+  rearrange() %>%
+  shave() %>% 
+  rplot() 
+  
+p + guides(x = guide_axis(n.dodge = 2))
+
+pvlt_ashs %>%
+  correlate() %>%
+  rearrange() %>% 
+  focus(contains("p_")) 
+
+pvlt_ashs %>%
+  corrr::correlate() %>%
+  shave() %>%
+  stretch() %>%
+  filter(abs(r) > 0.60) %>% 
+  arrange(desc(r))
+
+```
+
+```{r}
+pvlt_ashs %>%
+  correlate() %>%
+  network_plot()
+```
+
+# Correlation plots
+```{r}
+
+p_long <- pvlt_ashs %>% 
+  select(-p_1, `Immediate Recall` = p_total,
+         `Delayed Recall` = p_recall,
+         `Recognition Discrimination` = p_recog,
+         `Hippocampal Volume` = both_hippocamp_adjusted) %>% 
+  pivot_longer(cols = contains(c("Recall", "Discrimination")),
+               names_to = "test_component",
+                           values_to = "z_score") %>% 
+  pivot_longer(cols = "Hippocampal Volume",
+               names_to = "region",
+               values_to = "vol")
+
+p_hip <- p_long %>% filter(stringr::str_detect(region, "Hippocampal Volume"))
+p_br36 <- p_long %>% filter(stringr::str_detect(region, "Br36"))
+p_br35 <- p_long %>% filter(stringr::str_detect(region, "Br35"))
+p_phc <- p_long %>% filter(stringr::str_detect(region, "phc"))
+
+vol_vlt_cor((p_long))
+# 
+# ggscatter(p_phc, x = "vol", y = "z_score",
+#           facet.by = c("region", "test_component"),
+#           add = "reg.line", conf.int = TRUE, 
+#           cor.coef = TRUE, cor.method = "pearson",
+#           xlab = "Volume", 
+#           ylab = "Z-score", 
+#           title = "Memory and MTL Subfields")
+```
+
+```{r}
+
+p_hip$test_component %<>% fct_relevel("Immediate Recall", 
+                                     "Delayed Recall",
+                                     "Recognition Discrimination")
+
+ggscatter(p_hip, x = "vol", y = "z_score",
+          facet.by = c("test_component"),
+          add = "reg.line", conf.int = TRUE, 
+          xlab = "Hippocampal Volume (%ICV)", 
+          ylab = "Z-score", 
+          title = "Figure 2: Bilateral Hippocampal Volume and Verbal Memory Performance") +
+  stat_cor(
+   aes(label = paste(after_stat(rr.label), ..p.label.., sep = "~`,`~")),
+  label.y = 2
+  )
+```
+
+```{r}
+vol_vlt_cor(p_br36)
+```
+
+```{r}
+vol_vlt_cor(p_br35)
+```
+
+```{r}
+vol_vlt_cor(p_phc)
+
+```
+
+
+```{r explore confounders, echo=TRUE}
+summary(pvlt_ashs$age_at_mri)
+
+summary(hvlt_ashs$age_at_mri)
+
+summary(pvlt_ashs) 
+summary(hvlt_ashs)
+```
+
+# original analysis 
+```{r Data Import Template, include=FALSE}
+# input
+verbal_testing_data <- read_rds(here("objects/vlt_raw.RDS"))
+ashs_clean <- read_rds("objects/ashs_icv_adjusted.RDS") #changed to adjusted
 
 # Initialise the dataset as per the template.
 dsname <- "verbal_testing_data"
@@ -473,7 +1034,7 @@ pvlt_ashs <-
   distinct() %>% 
   left_join(ashs_clean)
 
-ignore <- c("test_date", "yob", "intvl_test", "session_year")
+ignore <- c("test_date", "yob", "intvl_test", "session_year", "left_icv_adjusted")
 
 pvlt_ashs %<>% 
   select(-contains(c("misc", "sul", "meninges")),
@@ -529,15 +1090,25 @@ pvlt_ashs %>%
 p_long <- pvlt_ashs %>% 
   pivot_longer(cols = contains("p_"), names_to = "test_component",
                            values_to = "z_score") %>% 
-  pivot_longer(cols = contains(c("L ", "R ", "ICV")),
+  pivot_longer(cols = contains(c("adjusted")),
                names_to = "region",
                values_to = "vol") %>% 
   filter(test_component != "p_total") #remove p_total 
 
-p_hip <- p_long %>% filter(stringr::str_detect(region, "Hip"))
+p_hip <- p_long %>% filter(stringr::str_detect(region, "ip"))
 p_br36 <- p_long %>% filter(stringr::str_detect(region, "Br36"))
 p_br35 <- p_long %>% filter(stringr::str_detect(region, "Br35"))
-p_phc <- p_long %>% filter(stringr::str_detect(region, "PHC"))
+p_phc <- p_long %>% filter(stringr::str_detect(region, "phc"))
+
+vol_vlt_cor((p_long$left_full_hippocampus_adjusted))
+
+ggscatter(p_phc, x = "vol", y = "z_score",
+          facet.by = c("region", "test_component"),
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Volume", 
+          ylab = "Z-score", 
+          title = "Memory and MTL Subfields")
 ```
 
 ```{r}
@@ -567,3 +1138,5 @@ summary(hvlt_ashs$age_at_mri)
 summary(pvlt_ashs) 
 summary(hvlt_ashs)
 ```
+
+# TO DO - correlation with partial corrections for age, sex etc

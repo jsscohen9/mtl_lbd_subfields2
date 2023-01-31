@@ -125,7 +125,7 @@ both_tests <- left_join(x, y) %>%
   slice_min(test_diff, with_ties = FALSE) %>% 
   ungroup
 
-total, delay, memory, and recall
+# total, delay, memory, and recall
 
 
 both_tests2 <- both_tests %>% select(-(c(INDDID, TestDate, test_diff,`TestDate.1.`, diagnosis)))
@@ -194,7 +194,6 @@ pvlt_heatmap
 
 remove(df, hvlt_heatmap, pvlt_heatmap, z_scores, original_cols, data)
 
-#
-heatmap of both 
+#heatmap of both 
 
-total, delay, memory, and recall
+#total, delay, memory, and recall

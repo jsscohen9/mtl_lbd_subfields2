@@ -791,19 +791,15 @@ df1 <- ashs_clean
 vol_start <- grep("left_anterior_hippocampus$", colnames(df1)) #column index to begin taking outcome vars
 vol_end <- grep("left_icv$", colnames(df1)) #column index to end
 
-ashs_clean
-ashs_adjusted <- ashs_clean[vol_start:vol_end] %>% transmute(./(left_icv*100)) %>% cbind(ashs_clean[1:(vol_start-1)])
-
-saveRDS(ashs_adjusted, file = "objects/ashs_adjusted_icv.RDS")
 ```
 
 ## Boxplots
 ```{r boxplots}
-title <- "Subregion Volumes, Adjusted (Before Batch Correction)"
+title <- "Subregion Volumes (as % of ICV)"
 input <- ashs_adjusted
 #obtain order of regions by mean volume
 df_raw_vol <- input %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>%
-  select(-contains(c("misc", "meninges", "sul"))) %>%
+  select(-contains(c("misc", "meninges", "sul", "icv"))) %>%
   pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>%
   mutate(ad_present = as.factor(ad_present))
 
@@ -1339,4 +1335,4 @@ kable_classic_2(table)
 
 ```
 
-# left + right divided by ICV 
+# left + right divided by ICV
