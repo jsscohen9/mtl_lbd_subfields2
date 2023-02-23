@@ -7,13 +7,14 @@
 ## Notes:
 ##   
 
-## load packages: ---------------------------
+## Load packages: ---------------------------
 
 library(tidyverse)
 library(here)
 library(janitor)
 library(magrittr)
 library(randomForest)
+library(naniar)
 library(conflicted)
 
 conflict_prefer("select", "dplyr")
@@ -21,17 +22,63 @@ conflict_prefer("filter", "dplyr")
 conflict_prefer("recode", "dplyr")
 
 
-# querying add'l data ---------------------------
+# Querying add'l data ---------------------------
 
 input_file <- here("data/original_INQuery_Output_2022.07.12_09.59_.xlsx")
-output_file <- here("reports", "inddids_all.csv")
-output_file_2 <- here("reports", "inddids_controls.csv")
 
 # Unique IDs to Query for more data in INDD
 
-# get list of unique INDDs from initial query
+# Count how many total 
+n_total <- 
+  original_query %>% 
+  select(INDDID) %>% 
+  distinct() %>% 
+  nrow() %T>%
+  print()
 
+# Count how many controls:
+n_controls<-
+  original_query %>% 
+  filter(ClinicalPhenotype1=="Normal") %>% 
+  select(INDDID) %>% 
+  distinct() %>% 
+  nrow() %T>%
+  print()
+
+# Count how many cases 
+# I think those enrolled through UDALL had "ClinicalPhenotype1" ==NA
+
+# Non-UDALL cases 
+n_cases_adrc <-
+  original_query %>% 
+  filter(ClinicalPhenotype1!="Normal") %>% 
+  select(INDDID) %>% 
+  distinct() %>% 
+  nrow() %T>%
+  print()
+
+# UDALL cases 
+n_cases_udall <-
+  original_query %>% 
+  filter(is.na(ClinicalPhenotype1)==T) %>% 
+  select(INDDID) %>% 
+  distinct() %>% 
+  nrow() %T>%
+  print()
+
+# Total cases:
+n_cases_all <- sum(n_cases_adrc, n_cases_udall) %T>%
+  print()
+
+# This should equal 0
+n_total - sum(n_controls,  n_cases_all)
+
+# Get list of unique INDDIDs from initial query
 original_query <- readxl::read_excel(input_file)
+
+# Save csv of unique inddids ----------------
+# All subjects
+output_file <- here("reports", "inddids_all.csv")
 
 inddids_all <- 
   original_query %>% 
@@ -39,6 +86,9 @@ inddids_all <-
   distinct()
 
 write_csv(inddids_all, file = output_file)
+
+# Controls
+output_file_2 <- here("reports", "inddids_controls.csv")
 
 inddids_controls <- 
   original_query %>% 
@@ -48,21 +98,32 @@ inddids_controls <-
 
 write_csv(inddids_controls, file = output_file_2)
 
-#clear workspace
-rm(list = ls())
+# Cases
+output_file_3 <- here("reports", "inddids_cases.csv")
 
-# collapse diagnoses ---------------------------
+inddids_cases <- 
+  original_query %>% 
+  filter(ClinicalPhenotype1!="Normal" | is.na(ClinicalPhenotype1)==T) %>%
+  select(INDDID) %>% 
+  distinct()
+
+write_csv(inddids_cases, file = output_file_3)
+
+# #clear workspace
+# rm(list = ls())
+
+# Collapse diagnoses ---------------------------
 
 input_file <- here("data/original_INQuery_Output_2022.07.12_09.59_.xlsx")
-output_file <- here("objects/id_diagnosis.RDS")
 
 # Rename INQuery output
 
 clinical <- readxl::read_excel(input_file) %>% 
   mutate(INDDID = as.character(INDDID))
 
+# Assign "MotorDx" and "CognitiveDx" to ClinicalPhenotype_Sum for
+# those without "ClinicalPhenotype1"
 
-# assign "MotorDx" and "CognitiveDx" to ClinicalPhenotype_Sum for those without "ClinicalPhenotype1"
 clinical2 <- 
   clinical %>%
   replace_na(list(MotorDx1 = "NA", CognitiveDx = "NA")) %>% #to be able to concatenate them later
@@ -92,16 +153,20 @@ clinical3 <- clinical2 %>%
   select(INDDID, 
          diagnosis = ClinicalPhenotype_sum)
 
-#save as "id_diagnosis"
+# Check if cases or controls lost with this step
+### TO DO for each step of munge file
+
+# Save as "id_diagnosis"
+output_file <- here("objects/id_diagnosis.RDS")
+
 saveRDS(clinical3, file = output_file)
 
-#clear workspace
-rm(list = ls())
+# #clear workspace
+# rm(list = ls())
 
-# import demographics ----------------------- 
+# Import demographics ----------------------- 
 input_file <- here("data/demographic_biomarker_autopsy_(2022.12.01 21.51).xlsx")
-output_file <- here("objects/dem_biomarkers2.RDS")
-  
+
 dem_biomarkers <- readxl::read_excel(input_file) %>% 
   mutate(INDDID = as.character(INDDID),
          Education = na_if(Education, 999),
@@ -119,39 +184,14 @@ dem_biomarkers2 <- dem_biomarkers %>%
            PETTracer, PET_read = Clinical_Read
   ))
 
+# Save output 
+output_file <- here("objects/dem_biomarkers2.RDS")
+
 saveRDS(dem_biomarkers2, file = output_file)
 
-# ashs import --------------------
-input_file <- here("data/ashs_all_output.csv")
-output_file1 <- here("objects/ashs_t1.RDS")
-output_file2 <- here("objects/ashs_t2.RDS")
-  
-ashs <- read_csv(input_file) %>% 
-  mutate(INDDID = as.character(INDDID)) %>% 
-  filter(Version != "0.1.1") %>% #remove output from ASHS 0.1.1
-  rename(FlywheelSessionLabel = MRISession)
-
-# split ashs 
-ashs_t1 <- ashs %>% 
-  filter(Version == '0.2.0_t1') %>% 
-  distinct()
-
-saveRDS(ashs_t1, file = output_file1)
-
-ashs_t2 <- ashs %>% 
-  filter(Version == '0.2.0') %>% 
-  distinct()
-
-saveRDS(ashs_t2, file = output_file2)
-
-#clear workspace
-rm(list = ls())
-
-# mri metadata ------------------------
+# Import MRI metadata ------------------------
 input_file <- here("data/mri_bids_(2022.12.02 11.21).xlsx")
-output_file1 <- here("objects/mri_bids_data_t1.RDS")
-output_file2 <- here("objects/mri_bids_data_t2.RDS")
-  
+
 mri_bids_data <- readxl::read_excel(input_file, col_types = "text" ) %>% 
   mutate(INDDID = as.character(INDDID))
 
@@ -180,43 +220,92 @@ mri_bids_data_2 <-
          BidsFolder,
          Expr2)
 
-#T1
+# T1
+output_file1 <- here("objects/mri_bids_data_t1.RDS")
+
 mri_bids_data_t1 <- mri_bids_data_2 %>% 
   filter(FlywheelAcquisitionMeasurement == 'T1')
 
 saveRDS(mri_bids_data_t1, output_file1)
 
-#T2
+# T2
+
+output_file2 <- here("objects/mri_bids_data_t2.RDS")
+
 mri_bids_data_t2 <- mri_bids_data_2 %>% 
   filter(FlywheelAcquisitionMeasurement == 'T2')
-         
+
 saveRDS(mri_bids_data_t2, output_file2)
 
-# clinical testing -----------------------
+# Clinical testing -----------------------
+# MMSE
 mmse <- readxl::read_excel(here("data/mmse_(2022.10.26 15.44).xlsx")) %>% 
   mutate(INDDID = as.character(INDDID))
 
+saveRDS(mmse, file = here("objects/clinical_testing/mmse.RDS"))
+
+# MOCA
 moca <- readxl::read_excel(here("data/moca_(2022.10.26 16.08).xlsx")) %>% 
   mutate(INDDID = as.character(INDDID))
 
+saveRDS(moca, file = here("objects/clinical_testing/moca.RDS"))
+
+# Verbal learning testing
 vlt <- readxl::read_excel(here("data/vlt_(2022.11.08 09.42).xlsx")) %>% 
   mutate(INDDID = as.character(INDDID))
 
-saveRDS(vlt, file = here("objects/vlt_raw.RDS"))
+saveRDS(vlt, file = here("objects/clinical_testing/vlt_raw.RDS"))
 
+# Epworth
 epworth <- readxl::read_excel(here("data/epworth_(2022.10.04 17.59).xlsx")) %>% 
   mutate(INDDID = as.character(INDDID))
 
+saveRDS(epworth, file = here("objects/clinical_testing/ess.RDS"))
+
+# Rey figure
 rey_figure <- readxl::read_excel("data/rey_figure_(2023.01.24 13.51).xlsx") %>% 
   mutate(INDDID = as.character(INDDID))
 
-saveRDS(rey_figure, file = here("objects/rey_figure.RDS"))
+saveRDS(rey_figure, file = here("objects/clinical_testing/rey_figure.RDS"))
 
-#clear workspace
-rm(list = ls())
+# #clear workspace
+# rm(list = ls())
 
-# merge datasets ---------------------------
-input_file <- here("objects/ashs_t1.RDS")
+# ASHS import --------------------
+input_file <- here("data/ashs_all_output.csv")
+  
+ashs <- read_csv(input_file) %>% 
+  mutate(INDDID = as.character(INDDID)) %>% 
+  filter(Version != "0.1.1") %>% #remove output from ASHS 0.1.1
+  rename(FlywheelSessionLabel = MRISession)
+
+# Split ASHS into T1 and T2 
+ashs_t1 <- ashs %>% 
+  filter(Version == '0.2.0_t1') %>% 
+  distinct()
+
+# Save T1 
+output_file1 <- here("objects/ashs_t1.RDS")
+
+saveRDS(ashs_t1, file = output_file1)
+
+# Save T2 
+output_file2 <- here("objects/ashs_t2.RDS")
+
+ashs_t2 <- ashs %>% 
+  filter(Version == '0.2.0') %>% 
+  distinct()
+
+saveRDS(ashs_t2, file = output_file2)
+
+# #clear workspace
+# rm(list = ls())
+
+# Merge ASHS T1 with original query file (includes diagnosis) ---------------------------
+# and demographics/biomarkers datasets
+
+# First pivot ASHS output to wide
+input_file <- here("objects/ashs_t1.RDS") 
 
 ashs_t1 <- readRDS(input_file)
 
@@ -229,18 +318,11 @@ ashs_wide <- ashs_t1 %>%
 
 saveRDS(ashs_wide, here("objects/ashs_wide.RDS")) 
 
-#clear workspace
-rm(list = ls())
-
-# classify ad_present  ---------------------------
-#input
+# Then classify those subjects with ASHS output as ad_present or absent 
+# input
 ashs_wide <- readRDS(here("objects/ashs_wide.RDS"))
 diagnosis <- readRDS(here("objects/id_diagnosis.RDS"))
 dem_biomarkers2 <- readRDS("objects/dem_biomarkers2.RDS")
-
-#output
-output_1 <- here("objects/ashs_markers.RDS")
-output_2 <- here("objects/id_dx_ad_present.RDS")
 
 ashs_info <- ashs_wide %>% 
   select(INDDID, FlywheelSessionLabel) %>% 
@@ -312,9 +394,14 @@ ashs_markers <- ashs_info4 %>%
   distinct()
 
 
+# Output
+output_1 <- here("objects/ashs_markers.RDS")
+
 saveRDS(ashs_markers, output_1)
 
-#save table of dx and ad_present
+# Save table of dx and ad_present
+output_2 <- here("objects/id_dx_ad_present.RDS")
+
 id_dx_ad_present <- ashs_markers %>% select(1:3) %>% distinct()
 
 saveRDS(id_dx_ad_present, output_2)
@@ -783,60 +870,115 @@ ds %<>% select(inddid, ad_present, age_at_mri, everything())
 
 educat <- grep("education$", colnames(ds)) #column index
 
-ds_full_hippocampus <- ds %>% 
+ds_summed_regions <- ds %>% 
   mutate(left_full_hippocampus = 
            left_anterior_hippocampus + left_posterior_hippocampus,
          right_full_hippocampus = 
            right_anterior_hippocampus + right_posterior_hippocampus,
-         both_hippocamp = left_full_hippocampus + right_full_hippocampus) %>% 
-  select(all_of(c(1:educat)), left_full_hippocampus,
-         right_full_hippocampus, both_hippocamp,
-         left_icv)
+         bilat_full_hippocamp = left_full_hippocampus + right_full_hippocampus,
+         bilat_ant_hippocamp = 
+           left_anterior_hippocampus + right_anterior_hippocampus,
+         bilat_post_hippocamp = 
+           left_posterior_hippocampus + right_posterior_hippocampus,
+         bilat_erc = left_erc + right_erc,
+         bilat_br_35 = left_br_35 + right_br_35,
+         bilat_br_36 = left_br_36 + right_br_36,
+         bilat_phc = left_phc + right_phc) %>% 
+  select(all_of(c(1:educat)),
+         session_year,
+         left_anterior_hippocampus,
+         left_posterior_hippocampus,
+         left_full_hippocampus,
+         left_erc,
+         left_br_35,
+         left_br_36,
+         left_phc,
+         right_anterior_hippocampus,
+         right_posterior_hippocampus,
+         right_full_hippocampus, 
+         right_erc,
+         right_br_35,
+         right_br_36,
+         right_phc,
+         bilat_full_hippocamp,
+         bilat_ant_hippocamp,
+         bilat_post_hippocamp,
+         bilat_erc,
+         bilat_br_35,
+         bilat_br_36,
+         bilat_phc,
+         left_icv, 
+         everything())
          
 # Save cleaned dataframe for future use
 saveRDS(ds, file = here("objects/ashs_clean.RDS"))
 
-saveRDS(ds_full_hippocampus, file = "objects/ds_full_hippocampus.RDS")
-
-rm(list=ls())
+saveRDS(ds_summed_regions, file = "objects/ds_summed_regions.RDS")
 
 # Normalize volumes by dividing by ICV -------------
-ashs_clean <-read_rds("objects/ashs_clean.RDS")
+ds_summed_regions <- read_rds("objects/ds_summed_regions.RDS")
 
-vol_start <- grep("left_anterior_hippocampus$", colnames(ashs_clean)) #column index to begin taking outcome vars
-vol_end <- grep("left_icv$", colnames(ashs_clean)) #column index to end
+vol_start <- grep("left_anterior_hippocampus$", colnames(ds_summed_regions)) #column index to begin
+vol_end <- grep("left_icv$", colnames(ds_summed_regions)) #column index to end
 
-ashs_adjusted <- ashs_clean
+# copy cols to adjust 
+ds_adjusted <- ds_summed_regions[vol_start:vol_end] 
 
-colnames(ashs_adjusted)[vol_start:vol_end] <- paste0(colnames(ashs_adjusted)[vol_start:vol_end], "_adjusted")
+# rename them 
+colnames(ds_adjusted) <- paste0(colnames(ds_adjusted), "_adjusted")
 
-icv_adjusted <- ashs_clean[vol_start:vol_end] %>% transmute(.*100/(left_icv)) 
-colnames(icv_adjusted)<- paste0(colnames(icv_adjusted), "_adjusted")
-icv_adjusted
+# divide by ICV and multiply by 100
+ds_adjusted %<>% transmute(.*100/(left_icv_adjusted)) 
 
-ashs_icv_adjusted <- cbind(ashs_clean, icv_adjusted)
+ds_adjusted <- cbind(ds_summed_regions, ds_adjusted) %>% 
+  select(all_of(c(1:educat)),
+         session_year,
+         left_anterior_hippocampus,
+         left_posterior_hippocampus,
+         left_full_hippocampus,
+         left_erc,
+         left_br_35,
+         left_br_36,
+         left_phc,
+         right_anterior_hippocampus,
+         right_posterior_hippocampus,
+         right_full_hippocampus, 
+         right_erc,
+         right_br_35,
+         right_br_36,
+         right_phc,
+         bilat_full_hippocamp,
+         bilat_ant_hippocamp,
+         bilat_post_hippocamp,
+         bilat_erc,
+         bilat_br_35,
+         bilat_br_36,
+         bilat_phc,
+         left_icv,
+         ends_with("_adjusted"),
+         everything())
 
-saveRDS(ashs_icv_adjusted, file = "objects/ashs_icv_adjusted.RDS")
+saveRDS(ds_adjusted, file = "objects/ds_adjusted.RDS")
 
-# full hippocampus
-ds_full_hippocampus <- read_rds("objects/ds_full_hippocampus.RDS")
-hippo_icv_adjusted <- ds_full_hippocampus
-
-
-vol_start <- grep("left_full_hippocampus$", colnames(ds_full_hippocampus)) #column index to begin taking outcome vars
-vol_end <- grep("left_icv$", colnames(ds_full_hippocampus)) #column index to end
-
-hippo_icv_adjusted <- ds_full_hippocampus[vol_start:vol_end] %>% transmute(.*100/(left_icv)) 
-colnames(hippo_icv_adjusted)<- paste0(colnames(hippo_icv_adjusted), "_adjusted")
-hippo_icv_adjusted
-
-hippo_icv_adjusted <- cbind(ds_full_hippocampus, hippo_icv_adjusted) %>% 
-  as_tibble()
-
-saveRDS(hippo_icv_adjusted, file = "objects/hippo_icv_adjusted.RDS")
-
-rm(list=ls())
-
+# # full hippocampus
+# ds_full_hippocampus <- read_rds("objects/ds_full_hippocampus.RDS")
+# hippo_icv_adjusted <- ds_full_hippocampus
+# 
+# 
+# vol_start <- grep("left_full_hippocampus$", colnames(ds_full_hippocampus)) #column index to begin taking outcome vars
+# vol_end <- grep("left_icv$", colnames(ds_full_hippocampus)) #column index to end
+# 
+# hippo_icv_adjusted <- ds_full_hippocampus[vol_start:vol_end] %>% transmute(.*100/(left_icv)) 
+# colnames(hippo_icv_adjusted)<- paste0(colnames(hippo_icv_adjusted), "_adjusted")
+# hippo_icv_adjusted
+# 
+# hippo_icv_adjusted <- cbind(ds_full_hippocampus, hippo_icv_adjusted) %>% 
+#   as_tibble()
+# 
+# saveRDS(hippo_icv_adjusted, file = "objects/hippo_icv_adjusted.RDS")
+# 
+# rm(list=ls())
+# 
 # Export inddids and session_ids ------------
 mri_selected_ashs <- read_rds("objects/mri_selected_ashs_all.RDS")
 qc_ids <- mri_selected_ashs %>% select(subject = INDDID, 
