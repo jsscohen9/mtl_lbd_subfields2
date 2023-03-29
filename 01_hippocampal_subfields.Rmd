@@ -1,22 +1,17 @@
 ---
-title: "Hippocampal Subfield Analysis"
+title: "Hippocampal Subfield Analysis: Ancova btwn LBD+AD, LBD-AD and controls"
 author: "Jesse Cohen"
 date: "`r Sys.Date()`"
 output: html_document
-params:
-  data: 
-    label: "Input dataset:"
-    value: objects/ashs_icv_adjusted.RDS
-    input: file
 ---
 
-```{r setup, include=FALSE, }
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, 
-                      fig.path = "reports/", include = FALSE)
+                      include = FALSE)
 
 set.seed(0122023)
 
-rm(list = ls())
+#rm(list = ls())
 ```
 
 ```{r packages}
@@ -25,7 +20,6 @@ library(table1)
 library(gridExtra)
 library(modelr)
 library(gtsummary)
-library(hrbrthemes)
 library(viridis)
 library(ggforce)
 library(arsenal)
@@ -41,53 +35,67 @@ library(lobstr)       # Inspect R data structures.
 library(FSelector)    # Feature selection, information.gain().
 library(stringi)      # String concat operator %s+%.
 library(DT)
+library(ggpubr)
+library(tidyverse)
+library(broom)
+library("lattice")
+library(multcomp)
+library("marginaleffects")
+library(car)
+
+# # Data
+# 
+# ## Study design: INDD Query
+# 
+# -   Prospectively collected clinical, biomarker and imaging data from INDD Queried INDD for individuals with at least 1 MRI available and:
+# 
+# -   Clinical diagnosis PD, PD-MCI, PDD, or DLB or
+# 
+# -   Or healthy control (MMSE >27 or CDR = 0, no self-history of neuropsych dz)
+# 
+# Query resulted in:
+# 
+# 920 MRI sessions (523 unique subjects)
+# 
+# ANTsCT cortical thickness pipeline 549 successful (312 unique subjects)
 ```
 
-# Data
 
-## Study design: INDD Query
-
--   Prospectively collected clinical, biomarker and imaging data from INDD Queried INDD for individuals with at least 1 MRI available and:
-
--   Clinical diagnosis PD, PD-MCI, PDD, or DLB or
-
--   Or healthy control (MMSE >27 or CDR = 0, no self-history of neuropsych dz)
-
-Query resulted in:
-
-920 MRI sessions (523 unique subjects)
-
-ANTsCT cortical thickness pipeline 549 successful (312 unique subjects)
 
 <!-- # Data Import -->
 
-```{r munge}
+```{r munge, include=FALSE}
 source(file = here("munge.R"))
 ```
 
 
 ```{r initialize}
 # input
-ds <- read_rds(params$data)
+file_name <- c("objects/mris_matched_cases_and_controls.RDS") #start with matched MRI sessions for cases/controls
+
+# file_name <- c("objects/mris_matched_lbd_w_ad_vs_no_ad.RDS")
+ds <- read_rds(file = file_name)
+
+ashs_summed_icv_adjusted <- read_rds(file = "objects/ashs_summed_adjusted_for_icv.RDS")
 
 # Initialise the dataset as per the template.
-file_name <- (params$data)
 dsname <- str_extract(string = file_name,pattern = regex("(?<=objects/)(.*)(?=.RDS)"))
+
+# merge with df of ASHS summed and ICV adjusted output 
+
+ds %<>% left_join(ashs_summed_icv_adjusted)
 
 ds %>% sample_frac()
 
-```
 
-## ASHS data on cases and controls
+```
 
 ```{r , include=TRUE}
 DT::datatable(ds)
 ```
 # Results
-
+```{r Density Plots numerical variables, results = 'asis', eval=FALSE}
 ## Density Plots numerical variables
-
-```{r, results = 'asis', include=TRUE}
 ds %>%
   keep(is.numeric) %>%                     # Keep only numeric columns
   gather() %>%                             # Convert to key-value pairs
@@ -96,11 +104,53 @@ ds %>%
   facet_wrap(~ key, scales = "free") +   # In separate panels
     geom_histogram() + 
   theme(strip.text.x = element_text(size = 6))
+
+
+regions_to_keep <- c("yob", "education", "left_anterior_hippocampus")
+
+ds %>% 
+  colnames() %>%
+  str_extract_all(".*_adjusted")
+  
+quick_boxplots <- function(df, nvars) {
+  df %>%
+  select({(nvars)}) %>% 
+    pivot_longer(cols = {{nvars}}) %>% 
+    ggplot(aes(value)) +  
+  theme(axis.text.x = element_text(size = 4)) +
+  facet_wrap(~ name, scales = "free") +   # In separate panels
+    geom_histogram() + 
+  theme(strip.text.x = element_text(size = 6))
+}
+
+ds %>%
+  sapply(is.character) %>%
+  which()  ->
+chari
+
+# Identify the character variables by name.
+
+ds %>% 
+  names() %>% 
+  '['(chari) ->
+charc
+
+
+quick_boxplots(ds, regions_to_keep)
+# #  %>%                     # Keep only numeric columns
+#   pivot_longer() %>%         # Convert to key-value pairs
+#   ggplot(aes(value)) +  
+#   theme(axis.text.x = element_text(size = 4)) +
+#   facet_wrap(~ key, scales = "free") +   # In separate panels
+#     geom_histogram() + 
+#   theme(strip.text.x = element_text(size = 6))
+# }
 ```
 
-## Boxplots numerical variables
 
-```{r, results = 'asis', include=TRUE}
+
+```{r Boxplots numerical variables, results = 'asis', eval=FALSE}
+## Boxplots numerical variables
 ds %>%
   keep(is.numeric) %>%                     # Keep only numeric columns
   gather() %>%                             # Convert to key-value pairs
@@ -113,8 +163,6 @@ ds %>%
   
 ```
 
-## Demographics and Clinical Data
-
 ```{r Table 1}
 #reorder levels for table display
 naniar::any_na(ds$diagnosis)
@@ -122,31 +170,22 @@ ds$diagnosis <- factor(ds$diagnosis,
                                  levels = c("DLB", "PDD", "PD", "Normal"))
 naniar::any_na(ds$diagnosis)
 
-naniar::any_na(ds$race)
-ds$race <- fct_collapse(ds$race, 
-                        White = "White", 
-                        `Non-White or Unknown` = c("More than One Race", "Black or African American",
-                                                                       "Asian", "Unknown or Not Reported"))
-naniar::any_na(ds$race)
-
-fct_lump_n(ds$race, n=2, other_level = "Other")
-
 ds$ad_present <- as.character(ds$ad_present)
 ds$ad_present[ds$diagnosis == "Normal"] <- "Normal"
 ds$ad_present %>% table()
 
-ds$ad_present <- factor(ds$ad_present, 
-                             levels = c("Normal", "LBD-AD", "LBD+AD"), 
+ds$ad_present <- factor(ds$ad_present,
+                             levels = c("Normal", "LBD-AD", "LBD+AD"),
                              labels = c("Control", "LBD-AD", "LBD+AD"))
 
 ds$ad_present %>% table()
 
-ds$ad_marker %<>% as.character() %>% replace_na("Control") %>% as.factor()
+ds$ad_marker %<>% as.character() %>% as.factor()
 ds$ad_marker <- factor(ds$ad_marker,
-                          levels = c("autopsy", "pet", "csf", "Control"),
-                          labels = c("Autopsy", "PET", "CSF", "Control"))
+                          levels = c("autopsy", "autopsy_and_csf", "pet", "csf", "NA"),
+                          labels = c("Autopsy", "Autopsy", "PET", "CSF", "Control"))
 
-  
+
 
 # ds$diagnosis %>% table()
 # ds$diagnosis <- factor(ds$diagnosis,
@@ -162,7 +201,7 @@ ds$ad_marker <- factor(ds$ad_marker,
 label(ds$session_year) <- "Year of MRI"
 label(ds$ad_present) <- "AD+"
 label(ds$diagnosis) <- "Clinical Diagnosis"
-label(ds$age_at_mri) <- "Age"
+label(ds$age_at_mri) <- "Age at MRI"
 label(ds$sex) <- "Sex Assigned at Birth"
 units(ds$education) <- "years"
 label(ds$education) <- "Education"
@@ -181,47 +220,26 @@ table1(~ age_at_mri + sex + race + education + diagnosis + ad_marker| ad_present
 df_tbl1_marker <- ds %>% 
   filter(diagnosis!="Normal")
 
-table1(~ sex + race + age_at_mri + diagnosis + education | ad_present, data = df_tbl1_marker)
+table1(~ age_at_mri + sex + race +  diagnosis + education + ad_marker | ad_present, data = df_tbl1_marker)
 
+```
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      include = TRUE)
 ```
 
 ## Ancova of controls and cases 
 
-```{r}
-#select adjusted volumes 
-raw_start <- grep("left_anterior_hippocampus$", colnames(ds)) #column index to begin taking outcome vars
-raw_end <- grep("left_icv$", colnames(ds)) #column index to end
-
-ds_icv_adj <- ds %>% select(-c(raw_start:raw_end))
-
-```
-
-```{r}
-library(ggpubr)
-library(tidyverse)
-library(broom)
-library("lattice")
-library(multcomp)
-
-ds_icv_adj <- read_rds("objects/hippo_icv_adjusted.RDS")
-
-```
-# both hippocampi
-
-```{r}
-# Load and prepare the data
-ds_icv_adj <- ds_icv_adj %>% dplyr::select(everything(), 
-                                           b_hippo = both_hippocamp_adjusted)
-
-ggplot(ds_icv_adj) +
-  aes(x = ad_present, y = b_hippo, color = ad_present) +
+```{r include=TRUE, echo=TRUE}
+ggplot(ds) +
+  aes(x = ad_present, y = bilat_full_hippocamp_adjusted, color = ad_present) +
   geom_jitter() +
   theme(legend.position = "none")
 
-
 # check normality
-res_aov <- aov(b_hippo ~ ad_present,
-  data = ds_icv_adj
+res_aov <- aov(bilat_full_hippocamp_adjusted ~ ad_present,
+  data = ds
 )
 
 par(mfrow = c(1, 2)) # combine plots
@@ -232,28 +250,27 @@ hist(res_aov$residuals)
 # Equality of variances - homogeneity
 
 # Boxplot
-boxplot(b_hippo ~ ad_present,
-  data = ds_icv_adj
+boxplot(bilat_full_hippocamp_adjusted ~ ad_present,
+  data = ds
 )
 
 # Dotplot
-
-dotplot(b_hippo ~ ad_present,
-  data = ds_icv_adj
+dotplot(bilat_full_hippocamp_adjusted ~ ad_present,
+  data = ds
 )
 
-group_by(ds_icv_adj, ad_present) %>%
+group_by(ds, ad_present) %>%
   summarise(
-    mean = mean(b_hippo, na.rm = TRUE),
-    sd = sd(b_hippo, na.rm = TRUE)
+    mean = mean(bilat_full_hippocamp_adjusted, na.rm = TRUE),
+    sd = sd(bilat_full_hippocamp_adjusted, na.rm = TRUE)
   )
 
 
 # Are hippocampal volumes different between the three groups 
 
 # Anova
-res_aov <- aov(b_hippo ~ ad_present,
-  data = ds_icv_adj
+res_aov <- aov(bilat_full_hippocamp_adjusted ~ ad_present,
+  data = ds
 )
 
 summary(res_aov)
@@ -267,523 +284,785 @@ post_test <- glht(res_aov,
 summary(post_test)
 
 ```
-
-# linear model 
-```{r}
-ds_icv_adj %<>% filter(ad_present != "Normal")
-
-b_hip_mod <- lm(b_hippo ~ ad_present,
-      na.action = na.exclude,
-      data=ds_icv_adj)
-
-summary(b_hip_mod)
-
-
-b_hip_mod <- lm(b_hippo ~ ad_present + sex + age_at_mri + education + diagnosis,
-      na.action = na.exclude,
-      data=ds_icv_adj)
-
-summary(b_hip_mod)
-
-```
-
-# boxplot of bilateral hippocampal volume
-```{r}
-my_comparisons <- list( c("Control", "LBD-AD"), 
-                        c("Control", "LBD+AD"), 
-                        c("LBD-AD", "LBD+AD") )
-
-p2 <- ggboxplot(ds_icv_adj, x = "ad_present", y = "b_hippo",
-          color = "ad_present", palette = "jco",
-          xlab = FALSE,
-          ylab = "Hippocampal Volume (%ICV)",
-          add = "jitter", add.params = list(alpha = 0.5)) +
-  stat_compare_means(comparisons = my_comparisons, 
-                     label = "p.signif") + # Add pairwise comparisons p-value
-  stat_compare_means(label.y = 0.65, method = "anova")   # Add global p-value
-
-ggpar(p2, legend = "none", 
-      title = "Figure 1: Bilateral Hippocampal Volume in LBD +/- AD")
-  
-```
-
-
-
-## left hippocampus
-```{r}
-# Load and prepare the data
-ds_icv_adj <- ds_icv_adj %>% dplyr::select(everything(), 
-                                           l_hippo = left_full_hippocampus_adjusted)
-
-ggplot(ds_icv_adj) +
-  aes(x = ad_present, y = l_hippo, color = ad_present) +
-  geom_jitter() +
-  theme(legend.position = "none")
-
-
-# check normality
-res_aov <- aov(l_hippo ~ ad_present,
-  data = ds_icv_adj
-)
-
-par(mfrow = c(1, 2)) # combine plots
-
-# histogram
-hist(res_aov$residuals)
-
-# Equality of variances - homogeneity
-
-# Boxplot
-boxplot(l_hippo ~ ad_present,
-  data = ds_icv_adj
-)
-
-# Dotplot
-
-dotplot(l_hippo ~ ad_present,
-  data = ds_icv_adj
-)
-
-group_by(ds_icv_adj, ad_present) %>%
-  summarise(
-    mean = mean(l_hippo, na.rm = TRUE),
-    sd = sd(l_hippo, na.rm = TRUE)
-  )
-
-
-# Are hippocampal volumes different between the three groups 
-
-# Anova
-res_aov <- aov(l_hippo ~ ad_present,
-  data = ds_icv_adj
-)
-
-summary(res_aov)
-
-
-# Tukey HSD test:
-post_test <- glht(res_aov,
-  linfct = mcp(ad_present = "Tukey")
-)
-
-summary(post_test)
-
-```
-
-# linear model 
-```{r}
-ds_icv_adj %<>% filter(ad_present != "Normal")
-
-l_hip_mod <- lm(l_hippo ~ ad_present,
-      na.action = na.exclude,
-      data=ds_icv_adj)
-
-summary(l_hip_mod)
-
-
-l_hip_mod <- lm(l_hippo ~ ad_present + sex + age_at_mri + education + diagnosis,
-      na.action = na.exclude,
-      data=ds_icv_adj)
-
-summary(l_hip_mod)
-
-```
-
-
-
-## Repeat for R hippocampus:
-```{r}
-ds_icv_adj <- read_rds("objects/hippo_icv_adjusted.RDS")
-
-# Load and prepare the data
-ds_icv_adj <- ds_icv_adj %>% dplyr::select(inddid, 
-                                    r_hippo = right_full_hippocampus_adjusted,
-                                    everything())
-
-ggplot(ds_icv_adj) +
-  aes(x = ad_present, y = r_hippo, color = ad_present) +
-  geom_jitter() +
-  theme(legend.position = "none")
-
-
-# check normality
-res_aov <- aov(r_hippo ~ ad_present,
-  data = ds_icv_adj
-)
-
-par(mfrow = c(1, 2)) # combine plots
-
-# histogram
-hist(res_aov$residuals)
-
-# Equality of variances - homogeneity
-
-# Boxplot
-boxplot(r_hippo ~ ad_present,
-  data = ds_icv_adj
-)
-
-# Levene's test
-library(car)
-
-leveneTest(r_hippo ~ ad_present,
-  data = ds_icv_adj
-)
-
-library(dplyr)
-
-group_by(ds_icv_adj, ad_present) %>%
-  summarise(
-    mean = mean(r_hippo, na.rm = TRUE),
-    sd = sd(r_hippo, na.rm = TRUE)
-  )
-
-
-# Are hippocampal volumes different betweent the three groups 
-
-# Anova
-res_aov <- aov(r_hippo ~ ad_present,
-  data = ds_icv_adj
-)
-
-summary(res_aov)
-
-#post hoc
-library(multcomp)
-
-# Tukey HSD test:
-post_test <- glht(res_aov,
-  linfct = mcp(ad_present = "Tukey")
-)
-
-summary(post_test)
-```
-# linear model 
-```{r}
-r_hip_mod <- lm(r_hippo ~ ad_present+ sex + age_at_mri + education + diagnosis,
-      na.action = na.exclude,
-      data=ds_icv_adj)
-
-summary(r_hip_mod)
-
-
-r_hip_mod <- lm(r_hippo ~ ad_present,
-      na.action = na.exclude,
-      data=ds_icv_adj)
-
-summary(r_hip_mod)
-
-```
-## Figure 1: Subregion Volumes
-
-```{r subregion vols, include = FALSE}
-#obtain order of regions by mean volume 
-df_raw_vol <- ds %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>% 
-  select(-contains(c("MISC", "Meninges", "icv", "sul"))) %>% 
-  pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>% 
-  mutate(ad_present = as.factor(ad_present))
-
-
-vol_start <- grep("left_anterior_hippocampus$", colnames(ashs_clean)) #column index to begin taking outcome vars
-vol_end <- grep("left_icv$", colnames(ashs_clean)) #column index to end
-df_raw_vol %>% 
-  group_by(Region) %>% 
-  summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol)) 
-
-df_raw_vol$Region <- recode_factor(df_raw_vol$Region, 
-                           left_anterior_hippocampus= "L Ant Hip",
-                           right_anterior_hippocampus = "R Ant Hip",
-                           left_Posterior_hippocampus = "L Post Hip", 
-                           right_Posterior_hippocampus = "R Post Hip",
-                           left_Br36 = "L Br36",
-                           right_Br36 = "R Br36",
-                           left_PHC = "L PHC", 
-                           right_PHC = "R PHC", 
-                           left_Br35 = "L Br35", 
-                           right_Br35 = "R Br35",
-                           left_ERC = "L ERC", 
-                           right_ERC = "R ERC")
-
-df_raw_vol$ad_present <- recode_factor(df_raw_vol$ad_present,
-                               Normal = "Control",
-                               `FALSE` = "LBD-AD",
-                               `TRUE` = "LBD+AD")
-
-
-plot <- 
-  ggplot(df_raw_vol, aes(x = ad_present, y = Volume)) +
-  geom_boxplot() + 
-  facet_wrap(.~Region, scales = "free") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "Subregion Volumes, Unadjusted", 
-       y = "Volume (cm^3)",
-       x = "Case Status") +
-  font("y", size = 15) +
-  font("x", size = 15) +
-  theme(strip.text.x = element_text(size = 10)) +
-  geom_jitter(alpha = 0.2, size =1)
-
-```
-
-```{r include=TRUE}
-plot
-```
-
-```{r interactive subregion volume plot}
-# gt(mydata.filter)
-# # now with a few more options
-# mydata.filter %>%
-#   gt() %>%
-#   fmt_number(columns=2:4, decimals = 1) %>%
-#   tab_header(title = md("**Regulators of skin pathogenesis**"),
-#              subtitle = md("*during cutaneous leishmaniasis*")) %>%
-#   tab_footnote(
-#     footnote = "Deletion or blockaid ameliorates disease in mice",
-#     locations = cells_body(
-#       columns = geneID,
-#       rows = c(6, 7))) %>% 
-#   tab_footnote(
-#     footnote = "Associated with treatment failure in multiple studies",
-#     locations = cells_body(
-#       columns = geneID,
-#       rows = c(2:9))) %>%
-#   tab_footnote(
-#     footnote = "Implicated in parasite control",
-#     locations = cells_body(
-#       columns = geneID,
-#       rows = c(2))) %>%
-#   tab_source_note(
-#     source_note = md("Reference: Amorim *et al*., (2019). DOI: 10.1126/scitranslmed.aar3619"))
-# 
-# 
-# # Make an interactive table using the DT package ----
-# datatable(mydata.df[,c(1,12:14)], 
-#           extensions = c('KeyTable', "FixedHeader"), 
-#           filter = 'top',
-#           options = list(keys = TRUE, 
-#                          searchHighlight = TRUE, 
-#                          pageLength = 10, 
-#                          lengthMenu = c("10", "25", "50", "100")))
-# 
-# # Make an interactive scatter plot with plotly -----
-# # begin by storing your ggplot object
-# myplot <- ggplot(mydata.df) + 
-#   aes(x=healthy.AVG, y=disease.AVG) +
-#   geom_point(shape=16, size=1) +
-#   ggtitle("disease vs. healthy") +
-#   theme_bw()
-# 
-# #now use the ggplotly function from the plotly package to convert this ggplot object into an interactive plot
-# ggplotly(myplot)
-# 
-# #let's customize this graphic by adding a more informative mouseover tooltip
-# myplot <- ggplot(mydata.df) +
-#   aes(x=healthy.AVG, y=disease.AVG, 
-#       text = paste("Symbol:", geneID)) +
-#   geom_point(shape=16, size=1) +
-#   ggtitle("disease vs. healthy") +
-#   theme_bw()
-# 
-# ggplotly(myplot)
-```
-
-## Unadjusted Volumes Regression
-
-Does AD case status predict volume?
-
-```{r regression using unadjusted vols, echo=TRUE}
-# create cases_df
-cases_df <- ds %>%  select(-contains(c("misc", "meninges"))) %>% filter(!diagnosis %in% c("Normal")) %>% 
-  mutate(ad_present = ifelse(ad_present == "LBD+AD", 1,
-                              ifelse(ad_present == "LBD-AD", 0,
-                                      "NA")))
-
-# Position of variables in data frame to be used in for loop
-# region raw volume
-vol_start <- grep("left_anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars
-vol_end <- grep("right_ot_sul$", colnames(cases_df)) #column index to end
-vol_nvar <- vol_end - vol_start + 1
-
-# shift within df 
-out_shift <- vol_start - 1
-  
-#For loop
-dat <- cases_df
-out_mod <- vector('list', length(vol_nvar))
-i <- vol_start
-  
-for (i in vol_start:vol_end){
-  raw_volume = colnames(dat)[i]
-  
-mod_1 <- lm(get(raw_volume) ~ ad_present + diagnosis,
-      na.action = na.exclude,
-      data=dat)
-
-out_mod[[i-out_shift]] <- mod_1
-names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
-}
-
-
-library(broom)
-
-out_mod_summary <- summary(out_mod[[1]])
-out_mod_summary$coefficients %>% as_tibble()
-z <- tidy(mod_1, conf.int =T)[2,]
-z %>% mutate(region = names(out_mod[1]))
-
-tidy(out_mod[[1]])
-
-names(out_mod[1])
-
-df <- NULL
-
-for (i in 1:length(out_mod)) {
-z <- tidy(out_mod[[i]], conf.int =T)[2,]
-z <- z %>% mutate(region = names(out_mod[i]))
-df <- rbind(df, z)
-}
-
-df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
-  arrange(conf.high) %>% 
-  mutate(region = str_remove(region, "model_"),
-         region = str_replace(region, "_", " ")) %>% 
-  select(Region = "region", `Estimate` = "estimate", 
-         `S.E.` = "std.error", p = "p.value", `2.5% CI` = "conf.low", `97.5% CI` = "conf.high") 
-
-library(kableExtra)
-table <- knitr::kable(df1, digits = 4,
-  caption = 'Models of Unadjusted Subfield Volumes for +AD and diagnosis')
-
-# remove(df, df1, z, table, out_mod_summary, vol_end, vol_nvar, vol_start, dat, out, out_mod)
-```
-
-```{r Models of Unadjusted Subfield Vols for +AD and diagnosis, include=TRUE}
-kable_classic_2(table)
-```
-
-## Regression with adjusted volumes
-
-Adjusted (for Age, Sex, ICV) Volumes Regression, before matching
-
-```{r, include=FALSE}
-# Calculate adjusted volumes using "predict" based on all controls
-# Add columns with volumes adjusted for ICV 
-
-ctrl_df <- ds %>% filter(diagnosis == "Normal")
-cases_df <- ds %>% filter(diagnosis != "Normal")
-regions <- colnames(ds) %>% .[grepl(., pattern = "*.t_.*")] %>% .[1:22] %>% noquote(.)
-
-out <- vector('list', length(regions))
+# Plot adjusted volumes using Predict function:
+
+# linear model of just Full Bilateral Hippocampus 
+```{r include=T, echo=TRUE}
+# Comparing controls and cases 
+fit <- lm(bilat_full_hippocamp_adjusted ~
+            ad_present +
+            age_at_mri +
+                    race +
+                    sex +
+                    session_year + 
+                    education, data = ds, weights = weights)
+
+
+summary(fit) %>% coef()
+
+# Add interactions to model for significant covariates 
+fit_interactions <- lm(bilat_full_hippocamp_adjusted ~
+            ad_present +
+            age_at_mri +
+                    race +
+                    sex +
+                    session_year + 
+                    education +
+            ad_present * (age_at_mri + 
+                            sex +
+                            education), data = ds, weights = weights)
+
+# Does it perform better?
+# compare using an F-test with the anova() function
+anova(fit, fit_interactions)
   
 
-for (i in seq_along(regions)) {
-out[[i]] <- lm(paste(regions[i], '~', 'left_icv + age_at_mri + sex'), data=ctrl_df)
+# Create new df of predicted volumes (adjusted for covariates)
+bilat_full_hippocamp_predicted <- augment(fit) %>% as.tibble()
 
-ctrl_df[ , ncol(ctrl_df) + 1] <- predict(out[[i]], newdata=ctrl_df)
+fit_adjusted <- lm(.fitted ~
+     ad_present, data = bilat_full_hippocamp_predicted, weights = `(weights)`)
 
-colnames(ctrl_df)[ncol(ctrl_df)] <-  paste0(regions[i], "_adjusted")
+# Compare lm using volumes with and without adjustment for covariates
+summary(fit) 
 
-cases_df[ , ncol(cases_df) + 1] <- predict(out[[i]], newdata=cases_df)
+summary(fit_adjusted)
 
-colnames(cases_df)[ncol(cases_df)] <-  paste0(regions[i], "_adjusted")
+# Comparisons between levels 
+comp <- comparisons(fit,
+                     variables = list(ad_present = "all"),
+                     wts = "weights")
 
-}
+summary(comp) %>% as.tibble() %>% arrange(p.value) %>% DT::datatable(.)
 
-d2 <- rbind(ctrl_df, cases_df)
-
-#Example correlation for L anterior hippocampus
-ggscatter(ctrl_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted", 
-          add = "reg.line", conf.int = TRUE, 
-          cor.coef = TRUE, cor.method = "pearson",
-          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Controls)")
-
-ggscatter(cases_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted", 
-          add = "reg.line", conf.int = TRUE, 
-          cor.coef = TRUE, cor.method = "pearson",
-          xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Cases)")
-
-
-# Correlated variables
-# For the numeric variables generate a table of correlations
-
-cases_df %>%
-  corrr::correlate() %>%
-  shave() %>%
-  stretch() %>%
-  filter(abs(r) > 0.90) %>% 
-  arrange(r)
-
+# mutate(p.adjust_bh = p.adjust(p.value, method = "fdr"))
+         
 ```
 
+## AD_present vs clinical diagnosis to predict volume
+```{r AD_present vs clinical diagnosis, include=TRUE, echo=TRUE}
+
+# And with using clinical diagnosis instead of ad_present:
+fit_diagnosis <- lm(bilat_full_hippocamp_adjusted ~
+            diagnosis +
+            age_at_mri +
+                    race +
+                    sex +
+                    session_year + 
+                    education, data = ds, weights = weights)
 
 
-```{r, include=FALSE}
-# Is AD case status a predictor of volume  
-
-# Position of variables in data frame to be used in for loop
-# region raw volume
-raw_start <- grep("left_anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars
-raw_end <- grep("right_ot_sul$", colnames(cases_df)) #column index to end
-raw_nvar <- raw_end - raw_start + 1
-
-# "exposure" (adjusted region volume)
-adjusted_start <- grep("left_anterior_hippocampus_adjusted", colnames(cases_df))
-adjusted_end <- grep("right_ot_sul_adjusted", colnames(cases_df))
-adjusted_nvar <- adjusted_end - adjusted_start + 1
-
-# shift within df 
-shift_index <- adjusted_start - raw_start
-out_shift <- raw_start - 1
+# compare using an F-test with the anova() function
+anova(fit, fit_diagnosis)
   
-# modify cases_df
-cases_df %<>%
-  mutate(ad_present = recode(ad_present, `LBD-AD` = "0", `LBD+AD` = "1", Control = NULL)) %>% 
-  mutate(ad_present = as.logical(as.numeric(as.character(ad_present))))
+summary(fit)
 
+summary(fit_diagnosis)
 
-#For loop
-dat <- cases_df
-out_mod <- vector('list', length(raw_nvar))
-i <- raw_start
-
-for (i in raw_start:raw_end){
-  raw_volume = colnames(dat)[i]
-  adjusted_volume = colnames(dat)[i+shift_index]
-  
-mod_1 <- lm(get(raw_volume) ~ ad_present + get(adjusted_volume),
-      na.action = na.exclude,
-      data=dat)
-
-
-#Add new row for each brain region with output from model
-out_mod[[i-out_shift]] <- mod_1
-names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i])
-
-}
- 
-library(broom)
-
-df <- NULL
-
-for (i in 1:length(out_mod)) {
-z <- tidy(out_mod[[i]], conf.int =T)[2,]
-z <- z %>% mutate(region = names(out_mod[i]))
-df <- rbind(df, z)
-}
-
-df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>%
-  arrange(conf.high) %>% 
-  mutate(region = str_remove(region, "model_"),
-         region = str_replace(region, "_", " ")) %>% 
-  select(Region = "region", `Estimate` = "estimate", 
-         `S.E.` = "std.error", p = "p.value") #`2.5% CI` = "conf.low", `97.5% CI` = "conf.high"
-
-library(kableExtra)
-table <- knitr::kable(df1, digits = 4,
-  caption = 'Models of Adjusted Subfield Volumes for +AD')
 ```
 
-```{r include=T}
-kable_classic_2(table)
+# All subfields 
+```{r }
+
+fit <- lm(cbind(bilat_ant_hippocamp_adjusted,
+                bilat_post_hippocamp_adjusted,
+                bilat_erc_adjusted,
+                bilat_br_35_adjusted,
+                bilat_br_36_adjusted,
+                bilat_phc_adjusted
+                # bilat_full_hippocamp_adjusted
+                )
+                 ~
+            ad_present +
+            age_at_mri +
+                    race +
+                    sex +
+                    session_year + 
+                    education, data = ds, weights = weights)
+
+tidy(fit) %>% DT::datatable(ds)
+
+s <- summary(fit)
+
+lapply( s, tidy )
+
+
 ```
+
+Questions:
+1. Should I split session year by pre-post 2014?
+2. How can I add in interval btwn ad_marker and MRI if controls don't have one?
+
+
+<!-- # boxplot of bilateral hippocampal volume -->
+<!-- ```{r} -->
+<!-- my_comparisons <- list( c("Control", "LBD-AD"),  -->
+<!--                         c("Control", "LBD+AD"),  -->
+<!--                         c("LBD-AD", "LBD+AD") ) -->
+
+<!-- p2 <- ggboxplot(ds, x = "ad_present", y = "b_hippo", -->
+<!--           color = "ad_present", palette = "jco", -->
+<!--           xlab = FALSE, -->
+<!--           ylab = "Hippocampal Volume (%ICV)", -->
+<!--           add = "jitter", add.params = list(alpha = 0.5)) + -->
+<!--   stat_compare_means(comparisons = my_comparisons,  -->
+<!--                      label = "p.signif") + # Add pairwise comparisons p-value -->
+<!--   stat_compare_means(label.y = 0.65, method = "anova")   # Add global p-value -->
+
+<!-- ggpar(p2, legend = "none",  -->
+<!--       title = "Figure 1: Bilateral Hippocampal Volume in LBD +/- AD") -->
+
+<!-- ``` -->
+
+<!-- # Table 2: MTL subregions in LBD +/- AD -->
+<!-- ## Import Matched LBD+AD to LBD-AD  -->
+<!-- ```{r} -->
+<!-- library(gtsummary) -->
+<!-- library(multcomp) -->
+<!-- # Import matched LBD +/-AD df -->
+
+<!-- # input -->
+<!-- file_name <- c("objects/mris_matched_lbd_w_ad_vs_no_ad.RDS") -->
+<!-- ds <- read_rds(file = file_name) -->
+
+<!-- ashs_summed_icv_adjusted <- read_rds(file = "objects/ashs_summed_adjusted_for_icv.RDS") -->
+
+<!-- # Initialise the dataset as per the template. -->
+<!-- dsname <- str_extract(string = file_name,pattern = regex("(?<=objects/)(.*)(?=.RDS)")) -->
+
+<!-- # merge with df of ASHS summed and ICV adjusted output  -->
+
+<!-- ds %<>% left_join(ashs_summed_icv_adjusted) -->
+
+<!-- ds %>% sample_frac() -->
+
+<!-- #reorder levels for table display -->
+<!-- naniar::any_na(ds$diagnosis) -->
+<!-- ds$diagnosis <- factor(ds$diagnosis,  -->
+<!--                                  levels = c("DLB", "PDD", "PD", "Normal")) -->
+<!-- naniar::any_na(ds$diagnosis) -->
+
+<!-- ds$ad_present <- as.character(ds$ad_present) -->
+<!-- ds$ad_present[ds$diagnosis == "Normal"] <- "Normal" -->
+<!-- ds$ad_present %>% table() -->
+
+<!-- ds$ad_present <- factor(ds$ad_present, -->
+<!--                              levels = c("Normal", "LBD-AD", "LBD+AD"), -->
+<!--                              labels = c("Control", "LBD-AD", "LBD+AD")) -->
+
+<!-- ds$ad_present %>% table() -->
+
+<!-- ds$ad_marker %<>% as.character() %>% as.factor() -->
+<!-- ds$ad_marker <- factor(ds$ad_marker, -->
+<!--                           levels = c("autopsy", "autopsy_and_csf", "pet", "csf"), -->
+<!--                           labels = c("Autopsy", "Autopsy", "PET", "CSF"), exclude = "NA") -->
+
+
+<!-- ``` -->
+
+<!-- Add labels -->
+<!-- ```{r} -->
+<!-- # try labelled package -->
+<!-- label(ds$bilat_full_hippocamp_adjusted) <- "Whole hippocampus" -->
+<!-- label(ds$bilat_ant_hippocamp_adjusted) <- "Anterior hippocampus" -->
+<!-- label(ds$bilat_post_hippocamp_adjusted) <- "Posterior hippocampus" -->
+<!-- label(ds$bilat_erc_adjusted) <- "ERC" -->
+<!-- label(ds$bilat_br_35_adjusted) <- "BA35" -->
+<!-- label(ds$bilat_br_36_adjusted) <- "BA36" -->
+<!-- label(ds$bilat_phc_adjusted) <- "PHC" -->
+<!-- ``` -->
+
+<!-- ## Select variables for Table 2  -->
+<!-- ```{r} -->
+<!-- ds$ad_present <- fct_drop(ds$ad_present) -->
+
+<!-- # select variables -->
+<!-- ds_tbl_2 <- ds %>%  -->
+<!--   select(ad_present, -->
+<!--          sex, -->
+<!--          race, -->
+<!--          age_at_mri, -->
+<!--          education, -->
+<!--          diagnosis, -->
+<!--          session_year, -->
+<!--          distance, -->
+<!--          weights, -->
+<!--          subclass, -->
+<!--          left_icv, -->
+<!--          bilat_full_hippocamp_adjusted, -->
+<!--          bilat_ant_hippocamp_adjusted, -->
+<!--          bilat_post_hippocamp_adjusted, -->
+<!--          bilat_erc_adjusted, -->
+<!--          bilat_br_35_adjusted, -->
+<!--          bilat_br_36_adjusted, -->
+<!--          bilat_phc_adjusted)  -->
+
+<!-- # make table (not using weights, adjusting for confounders, or correcting for multiple comparisons) -->
+<!-- ds_tbl_2 %>%  -->
+<!--   select(ad_present, -->
+<!--          bilat_full_hippocamp_adjusted, -->
+<!--          bilat_ant_hippocamp_adjusted, -->
+<!--          bilat_post_hippocamp_adjusted, -->
+<!--          bilat_erc_adjusted, -->
+<!--          bilat_br_35_adjusted, -->
+<!--          bilat_br_36_adjusted, -->
+<!--          bilat_phc_adjusted) %>%  -->
+<!--   tbl_summary(by = ad_present, -->
+<!--             statistic = list(all_continuous() ~ "{mean} ({sd})")) %>% # split table by group) -->
+<!--   add_p(test = all_continuous() ~ "aov") %>%  -->
+<!--   modify_header(label = "**Subregion**") %>% # update the column header -->
+<!--   bold_labels()  -->
+<!--   # add_q() %>% #correction for multiple comparisons -->
+<!--   # add_ci() -->
+
+<!-- ``` -->
+
+<!-- ## Linear model of LBD+/-AD  -->
+<!-- ```{r} -->
+<!-- # Start with single y outcome, bilat_full_hippocamp_adjusted: -->
+
+<!-- # Just comparing LBD vs non-LBD -->
+<!-- fit <- lm(bilat_post_hippocamp_adjusted ~ ad_present * (age_at_mri + -->
+<!--                     race + -->
+<!--                     sex + -->
+<!--                     session_year +  -->
+<!--                     education), data = ds, weights = weights) -->
+
+<!-- tbl_regression(fit) -->
+
+<!-- comp <- comparisons(fit, -->
+<!--                      variables = "ad_present", -->
+<!--                      vcov = ~subclass, -->
+<!--                      newdata = datagrid(ad_present == ""), -->
+<!--                      wts = "weights") -->
+<!-- summary(comp) -->
+
+<!-- summary(fit) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # # ANCOVA: adjusted for covariates sex + age_at_mri + education + diagnosis -->
+<!-- # tbl_summary(ds_tbl_2, -->
+<!-- #             by = ad_present, # split table by group) -->
+<!-- #             statistic = list(all_continuous() ~ "{mean} ({sd})")) %>%  -->
+<!-- #   add_p(test = all_continuous() ~ "ancova",  -->
+<!-- #         test.args = "bilat_post_hippocamp_adjusted" ~ list(adj.vars = c("sex"))) %>%  -->
+<!-- #   modify_header(label = "**Subregion**") %>% # update the column header -->
+<!-- #   bold_labels() %>%  -->
+<!-- #   # add_q() %>% #correction for multiple comparisons -->
+<!-- #   add_ci() -->
+
+<!-- # make table of regression model: -->
+<!-- # build logistic regression model -->
+<!-- # m1 <- glm(bilat_full_hippocamp_adjusted ~ ad_present +  -->
+<!-- #             age_at_mri + -->
+<!-- #                     race + -->
+<!-- #                     sex + -->
+<!-- #                     left_icv +  -->
+<!-- #                     session_year + -->
+<!-- #                     education, -->
+<!-- #           data = ds,  -->
+<!-- #           family = binomial, -->
+<!-- #           weights = weights) -->
+<!-- #  -->
+<!-- # # view raw model results -->
+<!-- # summary(m1)$coefficients -->
+
+
+<!-- # treatment is +/-AD ; outcome is subregion volume -->
+
+<!-- # table of univariate regression models  -->
+<!-- ds_tbl_2 %>% -->
+<!--   tbl_uvregression( -->
+<!--     method = glm, -->
+<!--     y = response, -->
+<!--     method.args = list(family = binomial), -->
+<!--     exponentiate = TRUE, -->
+<!--     pvalue_fun = ~ style_pvalue(.x, digits = 2) -->
+<!--   ) %>% -->
+<!--   add_global_p() %>% # add global p-value -->
+<!--   add_nevent() %>% # add number of events of the outcome -->
+<!--   add_q() %>% # adjusts global p-values for multiple testing -->
+<!--   bold_p() %>% # bold p-values under a given threshold (default 0.05) -->
+<!--   bold_p(t = 0.10, q = TRUE) %>% # now bold q-values under the threshold of 0.10 -->
+<!--   bold_labels() -->
+<!-- ``` -->
+
+<!-- ## left hippocampus -->
+<!-- ```{r} -->
+<!-- # Load and prepare the data -->
+<!-- ds_icv_adj <- ds_icv_adj %>% dplyr::select(everything(),  -->
+<!--                                            l_hippo = left_full_hippocampus_adjusted) -->
+
+<!-- ggplot(ds_icv_adj) + -->
+<!--   aes(x = ad_present, y = l_hippo, color = ad_present) + -->
+<!--   geom_jitter() + -->
+<!--   theme(legend.position = "none") -->
+
+
+<!-- # check normality -->
+<!-- res_aov <- aov(l_hippo ~ ad_present, -->
+<!--   data = ds_icv_adj -->
+<!-- ) -->
+
+<!-- par(mfrow = c(1, 2)) # combine plots -->
+
+<!-- # histogram -->
+<!-- hist(res_aov$residuals) -->
+
+<!-- # Equality of variances - homogeneity -->
+
+<!-- # Boxplot -->
+<!-- boxplot(l_hippo ~ ad_present, -->
+<!--   data = ds_icv_adj -->
+<!-- ) -->
+
+<!-- # Dotplot -->
+
+<!-- dotplot(l_hippo ~ ad_present, -->
+<!--   data = ds_icv_adj -->
+<!-- ) -->
+
+<!-- group_by(ds_icv_adj, ad_present) %>% -->
+<!--   summarise( -->
+<!--     mean = mean(l_hippo, na.rm = TRUE), -->
+<!--     sd = sd(l_hippo, na.rm = TRUE) -->
+<!--   ) -->
+
+
+<!-- # Are hippocampal volumes different between the three groups  -->
+
+<!-- # Anova -->
+<!-- res_aov <- aov(l_hippo ~ ad_present, -->
+<!--   data = ds_icv_adj -->
+<!-- ) -->
+
+<!-- summary(res_aov) -->
+
+
+<!-- # Tukey HSD test: -->
+<!-- post_test <- glht(res_aov, -->
+<!--   linfct = mcp(ad_present = "Tukey") -->
+<!-- ) -->
+
+<!-- summary(post_test) -->
+
+<!-- ``` -->
+
+<!-- # linear model  -->
+<!-- ```{r} -->
+<!-- ds_icv_adj %<>% filter(ad_present != "Normal") -->
+
+<!-- l_hip_mod <- lm(l_hippo ~ ad_present, -->
+<!--       na.action = na.exclude, -->
+<!--       data=ds_icv_adj) -->
+
+<!-- summary(l_hip_mod) -->
+
+
+<!-- l_hip_mod <- lm(l_hippo ~ ad_present + sex + age_at_mri + education + diagnosis, -->
+<!--       na.action = na.exclude, -->
+<!--       data=ds_icv_adj) -->
+
+<!-- summary(l_hip_mod) -->
+
+<!-- ``` -->
+
+
+
+<!-- ## Repeat for R hippocampus: -->
+<!-- ```{r} -->
+<!-- ds_icv_adj <- read_rds("objects/hippo_icv_adjusted.RDS") -->
+
+<!-- # Load and prepare the data -->
+<!-- ds_icv_adj <- ds_icv_adj %>% dplyr::select(inddid,  -->
+<!--                                     r_hippo = right_full_hippocampus_adjusted, -->
+<!--                                     everything()) -->
+
+<!-- ggplot(ds_icv_adj) + -->
+<!--   aes(x = ad_present, y = r_hippo, color = ad_present) + -->
+<!--   geom_jitter() + -->
+<!--   theme(legend.position = "none") -->
+
+
+<!-- # check normality -->
+<!-- res_aov <- aov(r_hippo ~ ad_present, -->
+<!--   data = ds_icv_adj -->
+<!-- ) -->
+
+<!-- par(mfrow = c(1, 2)) # combine plots -->
+
+<!-- # histogram -->
+<!-- hist(res_aov$residuals) -->
+
+<!-- # Equality of variances - homogeneity -->
+
+<!-- # Boxplot -->
+<!-- boxplot(r_hippo ~ ad_present, -->
+<!--   data = ds_icv_adj -->
+<!-- ) -->
+
+<!-- # Levene's test -->
+<!-- library(car) -->
+
+<!-- leveneTest(r_hippo ~ ad_present, -->
+<!--   data = ds_icv_adj -->
+<!-- ) -->
+
+<!-- library(dplyr) -->
+
+<!-- group_by(ds_icv_adj, ad_present) %>% -->
+<!--   summarise( -->
+<!--     mean = mean(r_hippo, na.rm = TRUE), -->
+<!--     sd = sd(r_hippo, na.rm = TRUE) -->
+<!--   ) -->
+
+
+<!-- # Are hippocampal volumes different betweent the three groups  -->
+
+<!-- # Anova -->
+<!-- res_aov <- aov(r_hippo ~ ad_present, -->
+<!--   data = ds_icv_adj -->
+<!-- ) -->
+
+<!-- summary(res_aov) -->
+
+<!-- #post hoc -->
+<!-- library(multcomp) -->
+
+<!-- # Tukey HSD test: -->
+<!-- post_test <- glht(res_aov, -->
+<!--   linfct = mcp(ad_present = "Tukey") -->
+<!-- ) -->
+
+<!-- summary(post_test) -->
+<!-- ``` -->
+<!-- # linear model  -->
+<!-- ```{r} -->
+<!-- r_hip_mod <- lm(r_hippo ~ ad_present+ sex + age_at_mri + education + diagnosis, -->
+<!--       na.action = na.exclude, -->
+<!--       data=ds_icv_adj) -->
+
+<!-- summary(r_hip_mod) -->
+
+
+<!-- r_hip_mod <- lm(r_hippo ~ ad_present, -->
+<!--       na.action = na.exclude, -->
+<!--       data=ds_icv_adj) -->
+
+<!-- summary(r_hip_mod) -->
+
+<!-- ``` -->
+<!-- ## Figure 1: Subregion Volumes -->
+
+<!-- ```{r subregion vols, include = FALSE} -->
+<!-- #obtain order of regions by mean volume  -->
+<!-- df_raw_vol <- ds %>% select(inddid, ad_present, contains(c("left_", "right_"))) %>%  -->
+<!--   select(-contains(c("MISC", "Meninges", "icv", "sul"))) %>%  -->
+<!--   pivot_longer(cols = contains(c("left_", "right_")), names_to = "Region", values_to = "Volume") %>%  -->
+<!--   mutate(ad_present = as.factor(ad_present)) -->
+
+
+<!-- vol_start <- grep("left_anterior_hippocampus$", colnames(ashs_clean)) #column index to begin taking outcome vars -->
+<!-- vol_end <- grep("left_icv$", colnames(ashs_clean)) #column index to end -->
+<!-- df_raw_vol %>%  -->
+<!--   group_by(Region) %>%  -->
+<!--   summarise(Avg_vol = mean(Volume)) %>% arrange(desc(Avg_vol))  -->
+
+<!-- df_raw_vol$Region <- recode_factor(df_raw_vol$Region,  -->
+<!--                            left_anterior_hippocampus= "L Ant Hip", -->
+<!--                            right_anterior_hippocampus = "R Ant Hip", -->
+<!--                            left_Posterior_hippocampus = "L Post Hip",  -->
+<!--                            right_Posterior_hippocampus = "R Post Hip", -->
+<!--                            left_Br36 = "L Br36", -->
+<!--                            right_Br36 = "R Br36", -->
+<!--                            left_PHC = "L PHC",  -->
+<!--                            right_PHC = "R PHC",  -->
+<!--                            left_Br35 = "L Br35",  -->
+<!--                            right_Br35 = "R Br35", -->
+<!--                            left_ERC = "L ERC",  -->
+<!--                            right_ERC = "R ERC") -->
+
+<!-- df_raw_vol$ad_present <- recode_factor(df_raw_vol$ad_present, -->
+<!--                                Normal = "Control", -->
+<!--                                `FALSE` = "LBD-AD", -->
+<!--                                `TRUE` = "LBD+AD") -->
+
+
+<!-- plot <-  -->
+<!--   ggplot(df_raw_vol, aes(x = ad_present, y = Volume)) + -->
+<!--   geom_boxplot() +  -->
+<!--   facet_wrap(.~Region, scales = "free") + -->
+<!--   theme(axis.text.x = element_text(angle = 45, hjust = 1)) + -->
+<!--   labs(title = "Subregion Volumes, Unadjusted",  -->
+<!--        y = "Volume (cm^3)", -->
+<!--        x = "Case Status") + -->
+<!--   font("y", size = 15) + -->
+<!--   font("x", size = 15) + -->
+<!--   theme(strip.text.x = element_text(size = 10)) + -->
+<!--   geom_jitter(alpha = 0.2, size =1) -->
+
+<!-- ``` -->
+
+<!-- ```{r include=TRUE} -->
+<!-- plot -->
+<!-- ``` -->
+
+<!-- ```{r interactive subregion volume plot} -->
+<!-- # gt(mydata.filter) -->
+<!-- # # now with a few more options -->
+<!-- # mydata.filter %>% -->
+<!-- #   gt() %>% -->
+<!-- #   fmt_number(columns=2:4, decimals = 1) %>% -->
+<!-- #   tab_header(title = md("**Regulators of skin pathogenesis**"), -->
+<!-- #              subtitle = md("*during cutaneous leishmaniasis*")) %>% -->
+<!-- #   tab_footnote( -->
+<!-- #     footnote = "Deletion or blockaid ameliorates disease in mice", -->
+<!-- #     locations = cells_body( -->
+<!-- #       columns = geneID, -->
+<!-- #       rows = c(6, 7))) %>%  -->
+<!-- #   tab_footnote( -->
+<!-- #     footnote = "Associated with treatment failure in multiple studies", -->
+<!-- #     locations = cells_body( -->
+<!-- #       columns = geneID, -->
+<!-- #       rows = c(2:9))) %>% -->
+<!-- #   tab_footnote( -->
+<!-- #     footnote = "Implicated in parasite control", -->
+<!-- #     locations = cells_body( -->
+<!-- #       columns = geneID, -->
+<!-- #       rows = c(2))) %>% -->
+<!-- #   tab_source_note( -->
+<!-- #     source_note = md("Reference: Amorim *et al*., (2019). DOI: 10.1126/scitranslmed.aar3619")) -->
+<!-- #  -->
+<!-- #  -->
+<!-- # # Make an interactive table using the DT package ---- -->
+<!-- # datatable(mydata.df[,c(1,12:14)],  -->
+<!-- #           extensions = c('KeyTable', "FixedHeader"),  -->
+<!-- #           filter = 'top', -->
+<!-- #           options = list(keys = TRUE,  -->
+<!-- #                          searchHighlight = TRUE,  -->
+<!-- #                          pageLength = 10,  -->
+<!-- #                          lengthMenu = c("10", "25", "50", "100"))) -->
+<!-- #  -->
+<!-- # # Make an interactive scatter plot with plotly ----- -->
+<!-- # # begin by storing your ggplot object -->
+<!-- # myplot <- ggplot(mydata.df) +  -->
+<!-- #   aes(x=healthy.AVG, y=disease.AVG) + -->
+<!-- #   geom_point(shape=16, size=1) + -->
+<!-- #   ggtitle("disease vs. healthy") + -->
+<!-- #   theme_bw() -->
+<!-- #  -->
+<!-- # #now use the ggplotly function from the plotly package to convert this ggplot object into an interactive plot -->
+<!-- # ggplotly(myplot) -->
+<!-- #  -->
+<!-- # #let's customize this graphic by adding a more informative mouseover tooltip -->
+<!-- # myplot <- ggplot(mydata.df) + -->
+<!-- #   aes(x=healthy.AVG, y=disease.AVG,  -->
+<!-- #       text = paste("Symbol:", geneID)) + -->
+<!-- #   geom_point(shape=16, size=1) + -->
+<!-- #   ggtitle("disease vs. healthy") + -->
+<!-- #   theme_bw() -->
+<!-- #  -->
+<!-- # ggplotly(myplot) -->
+<!-- ``` -->
+
+<!-- ## Unadjusted Volumes Regression -->
+
+<!-- Does AD case status predict volume? -->
+
+<!-- ```{r regression using unadjusted vols, echo=TRUE} -->
+<!-- # create cases_df -->
+<!-- cases_df <- ds %>%  select(-contains(c("misc", "meninges"))) %>% filter(!diagnosis %in% c("Normal")) %>%  -->
+<!--   mutate(ad_present = ifelse(ad_present == "LBD+AD", 1, -->
+<!--                               ifelse(ad_present == "LBD-AD", 0, -->
+<!--                                       "NA"))) -->
+
+<!-- # Position of variables in data frame to be used in for loop -->
+<!-- # region raw volume -->
+<!-- vol_start <- grep("left_anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars -->
+<!-- vol_end <- grep("right_ot_sul$", colnames(cases_df)) #column index to end -->
+<!-- vol_nvar <- vol_end - vol_start + 1 -->
+
+<!-- # shift within df  -->
+<!-- out_shift <- vol_start - 1 -->
+
+<!-- #For loop -->
+<!-- dat <- cases_df -->
+<!-- out_mod <- vector('list', length(vol_nvar)) -->
+<!-- i <- vol_start -->
+
+<!-- for (i in vol_start:vol_end){ -->
+<!--   raw_volume = colnames(dat)[i] -->
+
+<!-- mod_1 <- lm(get(raw_volume) ~ ad_present + diagnosis, -->
+<!--       na.action = na.exclude, -->
+<!--       data=dat) -->
+
+<!-- out_mod[[i-out_shift]] <- mod_1 -->
+<!-- names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i]) -->
+<!-- } -->
+
+
+<!-- library(broom) -->
+
+<!-- out_mod_summary <- summary(out_mod[[1]]) -->
+<!-- out_mod_summary$coefficients %>% as_tibble() -->
+<!-- z <- tidy(mod_1, conf.int =T)[2,] -->
+<!-- z %>% mutate(region = names(out_mod[1])) -->
+
+<!-- tidy(out_mod[[1]]) -->
+
+<!-- names(out_mod[1]) -->
+
+<!-- df <- NULL -->
+
+<!-- for (i in 1:length(out_mod)) { -->
+<!-- z <- tidy(out_mod[[i]], conf.int =T)[2,] -->
+<!-- z <- z %>% mutate(region = names(out_mod[i])) -->
+<!-- df <- rbind(df, z) -->
+<!-- } -->
+
+<!-- df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>% -->
+<!--   arrange(conf.high) %>%  -->
+<!--   mutate(region = str_remove(region, "model_"), -->
+<!--          region = str_replace(region, "_", " ")) %>%  -->
+<!--   select(Region = "region", `Estimate` = "estimate",  -->
+<!--          `S.E.` = "std.error", p = "p.value", `2.5% CI` = "conf.low", `97.5% CI` = "conf.high")  -->
+
+<!-- library(kableExtra) -->
+<!-- table <- knitr::kable(df1, digits = 4, -->
+<!--   caption = 'Models of Unadjusted Subfield Volumes for +AD and diagnosis') -->
+
+<!-- # remove(df, df1, z, table, out_mod_summary, vol_end, vol_nvar, vol_start, dat, out, out_mod) -->
+<!-- ``` -->
+
+<!-- ```{r Models of Unadjusted Subfield Vols for +AD and diagnosis, include=TRUE} -->
+<!-- kable_classic_2(table) -->
+<!-- ``` -->
+
+<!-- ## Regression with adjusted volumes -->
+
+<!-- Adjusted (for Age, Sex, ICV) Volumes Regression, before matching -->
+
+<!-- ```{r, include=FALSE} -->
+<!-- # Calculate adjusted volumes using "predict" based on all controls -->
+<!-- # Add columns with volumes adjusted for ICV  -->
+
+<!-- ctrl_df <- ds %>% filter(diagnosis == "Normal") -->
+<!-- cases_df <- ds %>% filter(diagnosis != "Normal") -->
+<!-- regions <- colnames(ds) %>% .[grepl(., pattern = "*.t_.*")] %>% .[1:22] %>% noquote(.) -->
+
+<!-- out <- vector('list', length(regions)) -->
+
+
+<!-- for (i in seq_along(regions)) { -->
+<!-- out[[i]] <- lm(paste(regions[i], '~', 'left_icv + age_at_mri + sex'), data=ctrl_df) -->
+
+<!-- ctrl_df[ , ncol(ctrl_df) + 1] <- predict(out[[i]], newdata=ctrl_df) -->
+
+<!-- colnames(ctrl_df)[ncol(ctrl_df)] <-  paste0(regions[i], "_adjusted") -->
+
+<!-- cases_df[ , ncol(cases_df) + 1] <- predict(out[[i]], newdata=cases_df) -->
+
+<!-- colnames(cases_df)[ncol(cases_df)] <-  paste0(regions[i], "_adjusted") -->
+
+<!-- } -->
+
+<!-- d2 <- rbind(ctrl_df, cases_df) -->
+
+<!-- #Example correlation for L anterior hippocampus -->
+<!-- ggscatter(ctrl_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted",  -->
+<!--           add = "reg.line", conf.int = TRUE,  -->
+<!--           cor.coef = TRUE, cor.method = "pearson", -->
+<!--           xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Controls)") -->
+
+<!-- ggscatter(cases_df, x = "left_anterior_hippocampus", y = "left_anterior_hippocampus_adjusted",  -->
+<!--           add = "reg.line", conf.int = TRUE,  -->
+<!--           cor.coef = TRUE, cor.method = "pearson", -->
+<!--           xlab = "actual volume", ylab = "adjusted volume", title = "Adjusted L anterior Hippocampus Volume (Cases)") -->
+
+
+<!-- # Correlated variables -->
+<!-- # For the numeric variables generate a table of correlations -->
+
+<!-- cases_df %>% -->
+<!--   corrr::correlate() %>% -->
+<!--   shave() %>% -->
+<!--   stretch() %>% -->
+<!--   filter(abs(r) > 0.90) %>%  -->
+<!--   arrange(r) -->
+
+<!-- ``` -->
+
+
+
+<!-- ```{r, include=FALSE} -->
+<!-- # Is AD case status a predictor of volume   -->
+
+<!-- # Position of variables in data frame to be used in for loop -->
+<!-- # region raw volume -->
+<!-- raw_start <- grep("left_anterior_hippocampus$", colnames(cases_df)) #column index to begin taking outcome vars -->
+<!-- raw_end <- grep("right_ot_sul$", colnames(cases_df)) #column index to end -->
+<!-- raw_nvar <- raw_end - raw_start + 1 -->
+
+<!-- # "exposure" (adjusted region volume) -->
+<!-- adjusted_start <- grep("left_anterior_hippocampus_adjusted", colnames(cases_df)) -->
+<!-- adjusted_end <- grep("right_ot_sul_adjusted", colnames(cases_df)) -->
+<!-- adjusted_nvar <- adjusted_end - adjusted_start + 1 -->
+
+<!-- # shift within df  -->
+<!-- shift_index <- adjusted_start - raw_start -->
+<!-- out_shift <- raw_start - 1 -->
+
+<!-- # modify cases_df -->
+<!-- cases_df %<>% -->
+<!--   mutate(ad_present = recode(ad_present, `LBD-AD` = "0", `LBD+AD` = "1", Control = NULL)) %>%  -->
+<!--   mutate(ad_present = as.logical(as.numeric(as.character(ad_present)))) -->
+
+
+<!-- #For loop -->
+<!-- dat <- cases_df -->
+<!-- out_mod <- vector('list', length(raw_nvar)) -->
+<!-- i <- raw_start -->
+
+<!-- for (i in raw_start:raw_end){ -->
+<!--   raw_volume = colnames(dat)[i] -->
+<!--   adjusted_volume = colnames(dat)[i+shift_index] -->
+
+<!-- mod_1 <- lm(get(raw_volume) ~ ad_present + get(adjusted_volume), -->
+<!--       na.action = na.exclude, -->
+<!--       data=dat) -->
+
+
+<!-- #Add new row for each brain region with output from model -->
+<!-- out_mod[[i-out_shift]] <- mod_1 -->
+<!-- names(out_mod)[i-out_shift] <- paste0("model_", colnames(dat)[i]) -->
+
+<!-- } -->
+
+<!-- library(broom) -->
+
+<!-- df <- NULL -->
+
+<!-- for (i in 1:length(out_mod)) { -->
+<!-- z <- tidy(out_mod[[i]], conf.int =T)[2,] -->
+<!-- z <- z %>% mutate(region = names(out_mod[i])) -->
+<!-- df <- rbind(df, z) -->
+<!-- } -->
+
+<!-- df1 <- df %>% filter(!str_detect(region, pattern = "_sul|_misc|_meninges")) %>% -->
+<!--   arrange(conf.high) %>%  -->
+<!--   mutate(region = str_remove(region, "model_"), -->
+<!--          region = str_replace(region, "_", " ")) %>%  -->
+<!--   select(Region = "region", `Estimate` = "estimate",  -->
+<!--          `S.E.` = "std.error", p = "p.value") #`2.5% CI` = "conf.low", `97.5% CI` = "conf.high" -->
+
+<!-- library(kableExtra) -->
+<!-- table <- knitr::kable(df1, digits = 4, -->
+<!--   caption = 'Models of Adjusted Subfield Volumes for +AD') -->
+<!-- ``` -->
+
+<!-- ```{r include=T} -->
+<!-- kable_classic_2(table) -->
+<!-- ``` -->
 

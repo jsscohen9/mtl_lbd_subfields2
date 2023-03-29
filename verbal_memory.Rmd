@@ -26,110 +26,29 @@ library(ggpubr)
 library(heatmaply)
 library(DT)
 
-rm(list = ls())
+# rm(list = ls())
 ```
 # Add BNT here - (confrontation naming)
 
 # analysis of only both hippocampi summed
 ```{r Data Import Template, include=FALSE}
 # input
-verbal_testing_data <- read_rds(here("objects/vlt_raw.RDS"))
-ashs_clean <- read_rds("objects/hippo_icv_adjusted.RDS") #changed to adjusted
+#verbal_testing_data <- read_rds(here("objects/clinical_testing/vlt_raw.RDS"))
+
+verbal_testing_data <- read_rds(here("objects/clinical_testing/pvlt_cleaned_cases_and_controls.RDS"))
 
 # Initialise the dataset as per the template.
 dsname <- "verbal_testing_data"
 ds     <- get(dsname)
 
-ds %>% sample_frac()
-
-glimpse(ds)
-```
-
-# VLT data import
-```{r }
-datatable(ds)
-```
-
-```{r Normalize variable names automatically}
-# Normalise the variable names.
-
-ds %<>% clean_names(numerals="right")
-
-# Confirm the results are as expected.
-
-names(ds)
-
-# Note the available variables.
-
-vars <- names(ds)
+ashs_clean <- read_rds("objects/ashs_summed_adjusted_for_icv.RDS") #changed to adjusted
+#id_diagnosis <- read_rds("objects/id_dx_ad_present.RDS")
 
 ```
-
-```{r}
-# Note the identifiers.
-
-id <- c("inddid", "inddid_1", "test_date", "visit_id")
-
-# Initialise ignored variables: identifiers.
-
-ignore <- c(id)
-
-```
-
-
-```{r Character variables }
-# Identify the character variables by index.
-
-ds %>%
-  sapply(is.character) %>%
-  which()  ->
-chari
-
-# Identify the character variables by name.
-
-ds %>% 
-  names() %>% 
-  '['(chari) ->
-charc
-
-# Ignore character variables
-
-ignore <- union(ignore, charc)
-
-```
-
-```{r}
-#Once we have identified all of the variables to ignore we remove them from our list of variables to use.
-
-# Check the number of variables currently.
-
-length(vars)
-
-# Remove the variables to ignore.
-
-vars <- setdiff(vars, ignore)
-
-# Confirm they are now ignored.
-
-length(vars)
-```
-
-```{r Numeric Variables}
-ds[vars] %>%
-  sapply(is.numeric) %>%
-  which() %>%
-  names ->
-numi
-
-ds[numi] %>% 
-  summary()
-```
-
 
 ```{r Data Exploration, results = TRUE}
-#A random sample of the dataset:
+glimpse(ds)
 
-ds %>% sample_frac()
 ```
 
 
@@ -161,17 +80,18 @@ verbal_date <- ashs_clean %>%
   mutate(session_date = as.Date(session_date, format = '%Y%m%d'))
 
 verbal_date %<>% 
-  select(inddid, diagnosis, ad_present, session_date, hvlt_date = test_date, pvlt_date = `test_date_1`, dplyr::all_of(numi)) %>%
+  select(inddid, diagnosis, ad_present, session_date,  ageat_pvlt=ageat_test_1, pvlt_date = `test_date_1`, phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5,
+         phl_correct_15total, phl_correct_trial_9, phl_recognition_discrimin) %>%
   filter(is.na(phl_recognition_discrimin) == F) %>% #remove individuals who couldn't complete the test
-  pivot_longer(cols = c("hvlt_date", "pvlt_date"), names_to = "test", values_to = "test_date") %>% 
-  mutate(intvl_test = as.numeric(as.Date(test_date) - as.Date(session_date))/365) %>% 
-  select(inddid, diagnosis, ad_present, session_date, intvl_test, test, test_date) %>% distinct() %>% 
+  pivot_longer(cols = c("pvlt_date"), names_to = "test", values_to = "test_date") %>% 
+  mutate(intvl_test = as.numeric(as.Date(test_date) - as.Date(session_date))/365) %>% distinct() %>% 
   filter(is.na(intvl_test)==F) %>% 
-  filter(intvl_test > 0) %>% 
+  filter(abs(intvl_test) >= 0) %>% #this includes some tests that occurred before the MRI 
   group_by(inddid) %>% 
-  filter(intvl_test == min(intvl_test, na.rm = T)) %>%
-  ungroup() 
+  slice_min(intvl_test, with_ties = FALSE) %>%
+  ungroup()
 
+# hvlt_date = test_date,
 ```
 
 
@@ -249,75 +169,78 @@ hvlt_heatmap
 ```{r PVLT , results=TRUE}
 # PVLT
 # Subset PVLT testing
-pvlt <- ds %>% select(inddid, test_date_1, ageat_test, dplyr::all_of(dplyr::contains("phl"))) %>% 
-  replace_with_na(replace = list("<NA>")) %>% 
-  filter(!is.na(test_date_1)) %>% 
-  distinct()
+# pvlt <- ds %>% select(inddid, test_date_1, ageat_test, dplyr::all_of(dplyr::contains("phl"))) %>% 
+#   replace_with_na(replace = list("<NA>")) %>% 
+#   filter(!is.na(test_date_1)) %>% 
+#   distinct()
 
 # #remove individuals who couldn't complete the test
 # pvlt <- pvlt %>% filter(is.na(phl_recognition_discrimin)==F)
 
-data <- pvlt %>% 
-  select(inddid, test_date_1, ageat_test, phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5,
-         phl_correct_15total, phl_correct_trial_9, phl_recognition_discrimin) %>% 
-  filter(is.na(phl_recognition_discrimin)==F) %>% 
+data <- verbal_date %>% 
   rowwise() %>% 
-  mutate(immediate_max = max(phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5)) %>% 
-  mutate(remember_index = phl_correct_trial_9/immediate_max) 
+  mutate(immediate_max = max(phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5),
+         remember_index = phl_correct_trial_9/immediate_max,
+         immediate_mean = mean(phl_correct_trial_1, phl_correct_trial_2, phl_correct_trial_3, phl_correct_trial_4, phl_correct_trial_5)) 
 
-z_scores <- sapply(data[,-(1:3)], function(data) (data-mean(data))/sd(data))
-  
-#rename z_score column names 
-original_cols <- colnames(z_scores) 
-colnames(z_scores) <- paste0(original_cols, "_z_score")
 
-data <- cbind(data, z_scores)
+# z_scores <- sapply(data[,-(1:3)], function(data) (data-mean(data))/sd(data))
+#   
+# #rename z_score column names 
+# original_cols <- colnames(z_scores) 
+# colnames(z_scores) <- paste0(original_cols, "_z_score")
+# 
+# data <- cbind(data, z_scores)
 # 
 # #rejoin to original df
 # pvlt_normed <- verbal_date %>% filter(test == "pvlt_date") %>%
 # left_join(., data) %>% as.tibble()
 
 #create new column for mean of immediate recall z-scores
-pvlt_normed <- data %>% 
-  rowwise() %>% 
-  mutate(immediate_z_score_mean = mean(phl_correct_trial_1_z_score, phl_correct_trial_2_z_score, phl_correct_trial_3_z_score, phl_correct_trial_4_z_score, phl_correct_trial_5_z_score)) 
+# pvlt_normed <- data %>% 
+#   rowwise() %>% 
+#   mutate(immediate_z_score_mean = mean(phl_correct_trial_1_z_score, phl_correct_trial_2_z_score, phl_correct_trial_3_z_score, phl_correct_trial_4_z_score, phl_correct_trial_5_z_score)) 
 
 
-pvlt_normed %>%
-  keep(is.numeric) %>%                     # Keep only numeric columns
-  select(contains(c("trial_1_z", "trial_9_z", "remember_index_z"))) %>% 
-  gather() %>%                             # Convert to key-value pairs
-  ggplot(aes(value)) +                     # Plot the values
-    facet_wrap(~ key, scales = "free") + 
-    stat_boxplot(geom = "errorbar", width = 0.5) + # In separate panels
-    geom_density()              +            # boxplot
-  theme(strip.text.x = element_text(size = 10))+
-  theme(axis.text.x = element_text(size = 10)) +
-  ggtitle( "All PVLT scores")
+
+
+# pvlt_normed %>%
+#   keep(is.numeric) %>%                     # Keep only numeric columns
+#   select(contains(c("trial_1_z", "trial_9_z", "remember_index_z"))) %>% 
+#   gather() %>%                             # Convert to key-value pairs
+#   ggplot(aes(value)) +                     # Plot the values
+#     facet_wrap(~ key, scales = "free") + 
+#     stat_boxplot(geom = "errorbar", width = 0.5) + # In separate panels
+#     geom_density()              +            # boxplot
+#   theme(strip.text.x = element_text(size = 10))+
+#   theme(axis.text.x = element_text(size = 10)) +
+#   ggtitle( "All PVLT scores")
 ```
 
 ```{r}
 ### Data
-df <- pvlt_normed %>% select(contains("z_score"))
+# df <- pvlt_normed %>% select(contains("z_score"))
+
+df <- data %>% select(inddid, test_date, intvl_test, ageat_pvlt, p_total = immediate_mean, p_recall = phl_correct_trial_9, p_recog = remember_index)
 
 ### Let's Plot
-pvlt_heatmap <- heatmaply_cor(x = cor(df),
-              xlab = "Features",
-              ylab = "Features",
-              k_col = 3,
-              k_row = 3,
-              main = "PVLT Z-scores")
-
-
-pvlt_heatmap
-
-pvlt_normed %>% select(ageat_test,
-  p_1 = phl_correct_trial_1_z_score,
-  p_total = phl_correct_15total_z_score,
-  p_recall = remember_index_z_score,
-  p_recog = phl_recognition_discrimin_z_score) %>% 
-  correlate() %>%
-  network_plot()
+# pvlt_heatmap <- heatmaply_cor(x = cor(df),
+#               xlab = "Features",
+#               ylab = "Features",
+#               k_col = 3,
+#               k_row = 3,
+#               main = "PVLT Z-scores")
+# 
+# 
+# pvlt_heatmap
+# 
+# pvlt_normed %>% select(ageat_test,
+#   p_1 = phl_correct_trial_1_z_score,
+#   p_total = phl_correct_15total_z_score,
+#   p_recall = remember_index_z_score,
+#   p_recog = phl_recognition_discrimin_z_score) %>% 
+#   correlate() %>%
+#   network_plot()
 ```
 
 ```{r }
@@ -461,13 +384,10 @@ ggscatter(h_hip, x = "vol", y = "z_score",
 # Correlation of PVLT with volumes
 ```{r correlation of VLT with subfield volumes}
 pvlt_ashs <-
-  verbal_date %>% 
-  filter(test == "pvlt_date") %>% 
-  left_join(ds_p, by = c(inddid = "inddid", test_date = "test_date_1")) %>% 
-  distinct() %>% 
+  df %>% 
   left_join(ashs_clean)
 
-ignore <- c("test_date", "yob", "intvl_test", "session_year", "left_icv_adjusted")
+ignore <- c("test_date", "yob", "session_year", "left_icv_adjusted")
 
 pvlt_ashs %<>% 
   select(-contains(c("misc", "sul", "meninges")),
@@ -521,13 +441,14 @@ pvlt_ashs %>%
 ```{r}
 
 p_long <- pvlt_ashs %>% 
-  select(-p_1, `Immediate Recall` = p_total,
+  select(`Immediate Recall Mean` = p_total,
          `Delayed Recall` = p_recall,
          `Recognition Discrimination` = p_recog,
-         `Hippocampal Volume` = both_hippocamp_adjusted) %>% 
+         `Hippocampal Volume` = bilat_full_hippocamp_adjusted, 
+         ad_present) %>% 
   pivot_longer(cols = contains(c("Recall", "Discrimination")),
                names_to = "test_component",
-                           values_to = "z_score") %>% 
+                           values_to = "score") %>% 
   pivot_longer(cols = "Hippocampal Volume",
                names_to = "region",
                values_to = "vol")
@@ -537,7 +458,7 @@ p_br36 <- p_long %>% filter(stringr::str_detect(region, "Br36"))
 p_br35 <- p_long %>% filter(stringr::str_detect(region, "Br35"))
 p_phc <- p_long %>% filter(stringr::str_detect(region, "phc"))
 
-vol_vlt_cor((p_long))
+#vol_vlt_cor((p_long))
 # 
 # ggscatter(p_phc, x = "vol", y = "z_score",
 #           facet.by = c("region", "test_component"),
@@ -550,19 +471,19 @@ vol_vlt_cor((p_long))
 
 ```{r}
 
-p_hip$test_component %<>% fct_relevel("Immediate Recall", 
+p_hip$test_component %<>% fct_relevel("Immediate Recall Mean", 
                                      "Delayed Recall",
                                      "Recognition Discrimination")
 
-ggscatter(p_hip, x = "vol", y = "z_score",
+ggscatter(p_hip, x = "vol", y = "score", color = "ad_present",
           facet.by = c("test_component"),
           add = "reg.line", conf.int = TRUE, 
           xlab = "Hippocampal Volume (%ICV)", 
-          ylab = "Z-score", 
+          ylab = "Score", 
           title = "Figure 2: Bilateral Hippocampal Volume and Verbal Memory Performance") +
   stat_cor(
    aes(label = paste(after_stat(rr.label), ..p.label.., sep = "~`,`~")),
-  label.y = 2
+  label.y = 0
   )
 ```
 
