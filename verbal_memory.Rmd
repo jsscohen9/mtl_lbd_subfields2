@@ -26,7 +26,6 @@ library(ggpubr)
 library(heatmaply)
 library(DT)
 
-# rm(list = ls())
 ```
 # Add BNT here - (confrontation naming)
 
@@ -243,46 +242,46 @@ df <- data %>% select(inddid, test_date, intvl_test, ageat_pvlt, p_total = immed
 #   network_plot()
 ```
 
-```{r }
-# Create a heatmap of individuals with both pvlt and hvlt.
-# Select a single score for total, delay, memory, and recall
-ds_h <- hvlt_normed %>% select(inddid, test_date,
-                       h_1 = hvltrt_1_z_score, 
-                       h_total = hvltrt_tot_score_z_score,
-                       h_recall = remember_index_z_score,
-                       h_recog = hvltrecdist_score_z_score)
+<!-- ```{r } -->
+<!-- # Create a heatmap of individuals with both pvlt and hvlt. -->
+<!-- # Select a single score for total, delay, memory, and recall -->
+<!-- ds_h <- hvlt_normed %>% select(inddid, test_date, -->
+<!--                        h_1 = hvltrt_1_z_score,  -->
+<!--                        h_total = hvltrt_tot_score_z_score, -->
+<!--                        h_recall = remember_index_z_score, -->
+<!--                        h_recog = hvltrecdist_score_z_score) -->
 
-ds_p <- pvlt_normed %>% select(inddid, test_date_1,
-                               p_1 = phl_correct_trial_1_z_score,
-                               p_total = phl_correct_15total_z_score,
-                               p_recall = remember_index_z_score,
-                               p_recog = phl_recognition_discrimin_z_score)
+<!-- ds_p <- pvlt_normed %>% select(inddid, test_date_1, -->
+<!--                                p_1 = phl_correct_trial_1_z_score, -->
+<!--                                p_total = phl_correct_15total_z_score, -->
+<!--                                p_recall = remember_index_z_score, -->
+<!--                                p_recog = phl_recognition_discrimin_z_score) -->
 
-# Select ids with both tests completed at least once
-both_vlt <- intersect(hvlt_normed$inddid, pvlt_normed$inddid)
+<!-- # Select ids with both tests completed at least once -->
+<!-- both_vlt <- intersect(hvlt_normed$inddid, pvlt_normed$inddid) -->
 
-ds_z <- 
-  ds_h %>% full_join(ds_p) %>% 
-  filter(inddid %in% both_vlt) %>% 
-  mutate(date_diff = abs(as.numeric(test_date - test_date_1)/365)) 
+<!-- ds_z <-  -->
+<!--   ds_h %>% full_join(ds_p) %>%  -->
+<!--   filter(inddid %in% both_vlt) %>%  -->
+<!--   mutate(date_diff = abs(as.numeric(test_date - test_date_1)/365))  -->
 
-df <- ds_z %>% 
-  group_by(inddid) %>% 
-  filter(date_diff == min(date_diff)) %>% 
-  ungroup(inddid) %>% 
-  select(-c(inddid, test_date, test_date_1, date_diff))
+<!-- df <- ds_z %>%  -->
+<!--   group_by(inddid) %>%  -->
+<!--   filter(date_diff == min(date_diff)) %>%  -->
+<!--   ungroup(inddid) %>%  -->
+<!--   select(-c(inddid, test_date, test_date_1, date_diff)) -->
 
 
-### Let's Plot
-combo_heatmap <- heatmaply_cor(x = cor(df),
-              xlab = "Features",
-              ylab = "Features",
-              k_col = 3,
-              k_row = 3,
-              main = "VLT Z-scores")
+<!-- ### Let's Plot -->
+<!-- combo_heatmap <- heatmaply_cor(x = cor(df), -->
+<!--               xlab = "Features", -->
+<!--               ylab = "Features", -->
+<!--               k_col = 3, -->
+<!--               k_row = 3, -->
+<!--               main = "VLT Z-scores") -->
 
-combo_heatmap
-```
+<!-- combo_heatmap -->
+<!-- ``` -->
 
 
 # Correlation of HVLT with volumes
@@ -1061,3 +1060,5 @@ summary(hvlt_ashs)
 ```
 
 # TO DO - correlation with partial corrections for age, sex etc
+
+# use this: library(correlation)
