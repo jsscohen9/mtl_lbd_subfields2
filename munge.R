@@ -22,10 +22,7 @@ conflict_prefer("select", "dplyr")
 conflict_prefer("filter", "dplyr")
 conflict_prefer("recode", "dplyr")
 
-
-# Clear workspace
-rm(list = ls())
-
+set.seed(0122023)
 
 # Querying add'l data ---------------------------
 
@@ -239,12 +236,27 @@ csf_cases <- readxl::read_excel(input_file) %>%
          abeta42 = LuminexAbeta42,
          tau_abeta42_ratio = ttau / abeta42) %>% 
   select(INDDID, CSFDate, ttau, abeta42, tau_abeta42_ratio) %>% 
-  filter(is.na(CSFDate) == FALSE)
+  filter(is.na(CSFDate) == FALSE) %>% 
+  filter(!is.na(ttau)==T)
 
 # Save output 
 output_file <- here("objects/csf_cases.RDS")
 saveRDS(csf_cases, file = output_file)
 
+# fujirebio_import
+# Queried INDD using list of subjects without any ad_markers (no_markers_ids.csv) 
+# these data are in ADRC_Biomarker_Core_Data 
+# For this assay, AD is defined by CSF Ab42/Ab40 <0.7
+input_file2 <- here("data/csf_fujirebio_(2023.03.29 11.47).xlsx")
+
+csf_fujirebio <- readxl::read_excel(input_file2) %>% 
+  mutate(INDDID = as.character(INDDID)) %>% 
+  select(INDDID, SampleDate, Abeta42Abeta40Ratio, Platform) %>% 
+  filter(is.na(Abeta42Abeta40Ratio) == FALSE)
+
+# Save output 
+output_file2 <- here("objects/csf_fujirebio.RDS")
+saveRDS(csf_fujirebio, file = output_file2)
 
 # Controls autopsy, PET and CSF ---------
 # PET 
@@ -430,10 +442,7 @@ ashs_t2 <- ashs %>%
 
 saveRDS(ashs_t2, file = output_file2)
 
-# #clear workspace
-# rm(list = ls())
-
-# Classify all subjects as ad_present or absent: -----------
+# Classify all LBD as ad_present or absent: -----------
 
 # Number of cases/controls from original query
 diagnosis <- readRDS(here("objects/id_diagnosis.RDS"))
@@ -553,24 +562,55 @@ n_classified_pet <-
 
 # Cases classified:
 ad_classification_pet %>% 
-  filter(is.na(PET_read)) %T>% 
+  filter(!is.na(PET_read)) %T>% 
   print() %>% 
   nrow()
 
 # And for CSF -------
 csf <- readRDS(here("objects/csf_cases.RDS"))
 
+# csf_fujirebio <- readRDS(here("objects/csf_fujirebio.RDS"))
+
 ad_classification_csf <- 
   cases %>% 
   left_join(csf) %>% 
+#  left_join(csf_fujirebio) %>% 
   filter(!INDDID %in% cases_to_remove &
            !INDDID %in% classified_autopsy$INDDID) %>% 
-  filter(is.na(ttau)==F) %>% 
-  distinct()
+  filter(!is.na(ttau)==T ) %>% # | Platform == "Fujirebio" # there were one or two CSF samples from initial cohort with missing ttau measurement
+  distinct() %>% 
+  mutate(ad_present_csf = NA)
 
-# CSF
+# CSF (original cohort)
 ad_classification_csf$ad_present_csf[ad_classification_csf$tau_abeta42_ratio > 0.3] <- TRUE
 ad_classification_csf$ad_present_csf[ad_classification_csf$tau_abeta42_ratio <= 0.3] <- FALSE
+# 
+# # CSF (additional cases with fujirebio)
+# ad_classification_csf$ad_present_csf[ad_classification_csf$Abeta42Abeta40Ratio < 0.07 &
+#                                        ad_classification_csf$Platform == "Fujirebio"] <- TRUE 
+# ad_classification_csf$ad_present_csf[ad_classification_csf$Abeta42Abeta40Ratio >= 0.07 &
+#                                        ad_classification_csf$Platform == "Fujirebio"] <- FALSE 
+
+
+# # Compare ratio of +/-AD in each CSF cohort
+# ad_classification_csf %>% 
+#   group_by(INDDID) %>% 
+#   slice_sample(n = 1) %>% 
+#   group_by(Platform) %>% 
+#   summarise(mean = mean(ad_present_csf), n = n())
+# 
+# # Much higher proportion of positive cases in fujirebio group - is this due to lack of PD cases in this group?
+# ad_classification_csf %>% 
+#   group_by(Platform, diagnosis) %>% 
+#   summarise(n = n())
+# 
+# # Check percent among dx of DLB:
+# ad_classification_csf %>% 
+#   filter(diagnosis=="DLB") %>% 
+#   group_by(Platform) %>% 
+#   summarise(mean = mean(ad_present_csf), n = n())
+
+# TO DO SEE if any other cases have fujirebio csf to look for consistency ---------
 
 # Cases classifiable with CSF:
 csf_classifiable <-
@@ -739,6 +779,33 @@ n_cases_remove_due_to_markers <- cases_to_remove %>% n_distinct()
 ad_classification3 %<>% 
   filter(!INDDID %in% cases_to_remove) 
 
+# Add column for how classified:
+ad_classification3 %<>% 
+  mutate(classifier = case_when(
+    !is.na(ad_present_autopsy)==T ~ "autopsy",
+    !is.na(ad_present_pet)==T &
+      is.na(ad_present_autopsy)==T ~ "pet",
+    !is.na(ad_present_csf)==T &
+      is.na(ad_present_autopsy)==T &
+      is.na(ad_present_pet)==T ~ "csf"
+  ))
+
+# Breakdown by diagnosis:
+ad_classification3%>% group_by(ad_present, classifier) %>% summarise(count = n())
+
+# Number of cases successfully classified as LBD+/-AD 
+n_classified_lbd <- ad_classification3 %>% 
+  select(INDDID, diagnosis, ad_present) %>%
+  n_distinct()
+
+n_classified_lbd_plus_ad <- ad_classification3 %>% 
+  select(INDDID, diagnosis, ad_present) %>% 
+  filter(ad_present == TRUE) %>% n_distinct()
+
+n_classified_lbd_minus_ad <- ad_classification3 %>% 
+  select(INDDID, diagnosis, ad_present) %>% 
+  filter(ad_present == FALSE) %>% n_distinct()
+
 write_rds(ad_classification3, file = here("objects/ad_classification_final.RDS"))
 
 # Calculate interval between MRI (ASHS output) and AD biomarker/autopsy ---------
@@ -756,6 +823,19 @@ ashs_wide <- ashs_t1 %>%
              ASHS_import_batch == "2")) %>% # remove duplicate
   pivot_wider(id_cols = c(INDDID, FlywheelSessionLabel), 
               names_from = region, values_from = Volume)
+
+# Count cases with ASHS:
+n_cases_classified_with_ashs <- ad_classification3$INDDID %in% ashs_wide$INDDID %>% sum()
+
+# Export list of those classified but without ASHS output:
+original_query %<>% mutate(INDDID = as.character(INDDID)) 
+
+cases_lacking_ashs <- ad_classification3 %>% 
+  filter(!INDDID %in% ashs_wide$INDDID) %>%
+  left_join(original_query) %>% 
+  select(INDDID, diagnosis, contains("Flywheel"))
+
+write.csv(cases_lacking_ashs, "reports/ad_classified_lbd_no_ashs.csv")
 
 # For some reason there was one duplicate ASHS T1 session output with slightly
 # different volumes btwn the first and second run
@@ -890,8 +970,9 @@ autopsy_csf_mris <- autopsy_intvl_5y_or_more %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(ad_present_pet = NA, ad_marker = "autopsy_and_csf") %>% 
-  select(INDDID, diagnosis, ad_present_autopsy, ad_present_pet, ad_present_csf, ad_present, FlywheelSessionLabel,
-         session_date, AutopsyDate, PETDate, CSFDate, intvl, ad_marker)
+  select(INDDID, diagnosis, ad_present_autopsy, ad_present_pet, ad_present_csf, ad_present, classifier = ad_marker, FlywheelSessionLabel,
+         session_date, AutopsyDate, PETDate, CSFDate, intvl, ad_marker = ad_marker)
+
 
 # Join with rest of autopsy_mris 
 autopsy_mris <- rbind(autopsy_mris, autopsy_csf_mris)
@@ -1753,5 +1834,5 @@ pvlt_cases_with_ashs_and_ad_markers_table <-
 
   
 n_pvlt_cases_with_ashs_and_ad_markers <-
-  pvlt_cases_with_ashs_and_ad_markers$inddid %>% n_distinct()
+  pvlt_cases_with_ashs_and_ad_markers$inddid %>% n_distinct() 
   
