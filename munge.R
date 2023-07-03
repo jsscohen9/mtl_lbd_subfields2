@@ -8,7 +8,6 @@
 ##   
 
 ## Load packages: ---------------------------
-
 library(tidyverse)
 library(here)
 library(janitor)
@@ -17,6 +16,7 @@ library(randomForest)
 library(naniar)
 library(MatchIt)
 library(conflicted)
+library(dlookr)
 
 conflict_prefer("select", "dplyr")
 conflict_prefer("filter", "dplyr")
@@ -85,7 +85,6 @@ n_cases_all <- sum(n_cases_adrc, n_cases_udall) %T>%
 
 # This should equal 0
 n_total - sum(n_controls,  n_cases_all)
-
 
 # Save csv of unique inddids ----------------
 # All subjects
@@ -286,78 +285,6 @@ pet_controls %>% filter((PETTracer %in% c("Florbetaben (amyloid)", "Florbetapir 
 output_file <- here("objects/pet_controls.RDS")
 saveRDS(pet_controls, file = output_file)
 
-# input_file <- here("data/demographic_biomarker_autopsy_(2022.12.01 21.51).xlsx")
-# 
-# dem_biomarkers <- readxl::read_excel(input_file) %>% 
-#   mutate(INDDID = as.character(INDDID),
-#          Education = na_if(Education, 999),
-#          PET_read = Clinical_Read,
-#          tau_abeta42_ratio = LuminexTTauAbetaRatio)
-# 
-# 
-# dem_biomarkers2 <- dem_biomarkers %>% 
-#   select(c(INDDID, YOB, Race, Sex, 
-#            Education, AutopsyDate,
-#            NPDx1, Braak03, 
-#            ABeta, Braak06, CERAD, 
-#            CSFDate, tau_abeta42_ratio, 
-#            PETDate, 
-#            PETTracer, PET_read = Clinical_Read
-#   ))
-# 
-# # Save output 
-# output_file <- here("objects/dem_biomarkers2.RDS")
-# 
-# saveRDS(dem_biomarkers2, file = output_file)
-
-# Import MRI metadata ------------------------
-input_file <- here("data/mri_bids_(2022.12.02 11.21).xlsx")
-
-mri_bids_data <- readxl::read_excel(input_file, col_types = "text" ) %>% 
-  mutate(INDDID = as.character(INDDID))
-
-sessions_ashs <- mri_bids_data %>% select(INDDID, FlywheelSessionLabel) %>% distinct()
-
-# write_csv(sessions_ashs, file= "sessions_info_lbd.csv")
-
-mri_bids_data_2 <- 
-  mri_bids_data %>% 
-  select(INDDID, FlywheelSessionLabel, FlywheelProjectLabel, 
-         FlywheelAcquisitionMeasurement, FlywheelAcquisitionLabel, 
-         FlywheelAcquisitionFeatures, FlywheelAcquisitionInternalID,
-         DicomInstitutionName, DicomStationName,
-         DicomStudyInstanceUID,
-         DicomSeriesInstanceUID,
-         DicomSliceThickness, DicomPixelSpacingX, DicomPixelSpacingY,
-         DicomSequenceName,
-         DicomMagneticFieldStrength, 
-         DicomRepetitionTime, 
-         DicomEchoTime, 
-         DicomSpacingBetweenSlices, 
-         FileName,
-         BIDSFlywheelAcquisitionInternalID,
-         BidsFilename,
-         BidsPath,
-         BidsFolder,
-         Expr2)
-
-# T1
-output_file1 <- here("objects/mri_bids_data_t1.RDS")
-
-mri_bids_data_t1 <- mri_bids_data_2 %>% 
-  filter(FlywheelAcquisitionMeasurement == 'T1')
-
-saveRDS(mri_bids_data_t1, output_file1)
-
-# T2
-
-output_file2 <- here("objects/mri_bids_data_t2.RDS")
-
-mri_bids_data_t2 <- mri_bids_data_2 %>% 
-  filter(FlywheelAcquisitionMeasurement == 'T2')
-
-saveRDS(mri_bids_data_t2, output_file2)
-
 # Clinical testing -----------------------
 # MMSE
 mmse <- readxl::read_excel(here("data/mmse_(2022.10.26 15.44).xlsx")) %>% 
@@ -377,12 +304,6 @@ vlt <- readxl::read_excel(here("data/vlt_(2022.11.08 09.42).xlsx")) %>%
 
 saveRDS(vlt, file = here("objects/clinical_testing/vlt_raw.RDS"))
 
-# Epworth
-epworth <- readxl::read_excel(here("data/epworth_(2022.10.04 17.59).xlsx")) %>% 
-  mutate(INDDID = as.character(INDDID))
-
-saveRDS(epworth, file = here("objects/clinical_testing/ess.RDS"))
-
 # Rey figure
 rey_figure <- readxl::read_excel("data/rey_figure_(2023.01.24 13.51).xlsx") %>% 
   mutate(INDDID = as.character(INDDID))
@@ -393,54 +314,220 @@ saveRDS(rey_figure, file = here("objects/clinical_testing/rey_figure.RDS"))
 # rm(list = ls())
 
 # ASHS import --------------------
-input_file <- here("data/ashs_all_output.csv")
-  
-ashs <- read_csv(input_file) %>% 
-  mutate(INDDID = as.character(INDDID)) %>% 
-  filter(Version != "0.1.1") %>% #remove output from ASHS 0.1.1
-  rename(FlywheelSessionLabel = MRISession)
+# Read in data
 
-# Split ASHS into T1 and T2 
-ashs_t1 <- ashs %>% 
-  filter(Version == '0.2.0_t1') %>% 
-  mutate(ASHS_import_batch = "1") %>% 
-  distinct()
+input_file <- here("data/ashs_t1_output06012023.txt")
 
-# Import additional ASHS T1 data from Jesse's run in 3/2023
-input_file2 <- here("data/ashs_t1_output2_jsc_20230321.csv")
+df <- read_delim(file = input_file, 
+                 col_names = c("Input",
+                               "Hemisphere",
+                               "Region",
+                               "Label",
+                               "Volume"))
 
-col_names <- c("Input", "Hemisphere", "Region", "Label", "Volume")
-ashs_t1_extras <- read_csv(input_file2, col_names = col_names)
+input_file <- here("data/ashs_t1_output050323_2.txt")
 
-ashs_t1_extras %<>% mutate(INDDID = str_extract(Input, "[0-9]+"),
-                          FlywheelSessionLabel = str_extract(Input, "[0-9]+x[0-9]+"),
-                          Version = "0.2.0_t1",
-                          ASHS_import_batch = "2") %>% 
+# Identify field containing sub_id and ses_id
+id_col <- colnames(df)[1]
+
+# Split id column into sub_id and ses_id columns
+ashs_t1 <- df %>% 
+  mutate(INDDID = str_extract(Input, "[0-9]+"),
+         FlywheelSessionLabel = str_extract(Input, "[0-9]+x[0-9]+"),
+         Version = "0.2.0_t1") %>% 
   select(INDDID, FlywheelSessionLabel, Version, everything()) %>% 
   distinct()
 
-# Look how many duplicates in first and second batch of T1 imports:
-nrow(ashs_t1) + nrow(ashs_t1_extras)
-
-# rbind second T1 ASHS import to the first:
-ashs_t1 <- rbind(ashs_t1, ashs_t1_extras)
-
-# Check to see if any duplicates by seeing if lose any rows with distinct()
-ashs_t1 %>% distinct() %>% nrow()
+# # original code 
+# input_file <- here("data/ashs_all_output.csv")
+#   
+# ashs <- read_csv(input_file) %>% 
+#   mutate(INDDID = as.character(INDDID)) %>% 
+#   filter(Version != "0.1.1") %>% #remove output from ASHS 0.1.1
+#   rename(FlywheelSessionLabel = MRISession)
+# 
+# # Split ASHS into T1 and T2 
+# ashs_t1 <- ashs %>% 
+#   filter(Version == '0.2.0_t1') %>% 
+#   mutate(ASHS_import_batch = "1") %>% 
+#   distinct()
+# 
+# # Import additional ASHS T1 data from Jesse's run in 3/2023
+# input_file2 <- here("data/ashs_t1_output2_jsc_20230321.csv")
+# 
+# col_names <- c("Input", "Hemisphere", "Region", "Label", "Volume")
+# ashs_t1_extras <- read_csv(input_file2, col_names = col_names)
+# 
+# ashs_t1_extras %<>% mutate(INDDID = str_extract(Input, "[0-9]+"),
+#                           FlywheelSessionLabel = str_extract(Input, "[0-9]+x[0-9]+"),
+#                           Version = "0.2.0_t1",
+#                           ASHS_import_batch = "2") %>% 
+#   select(INDDID, FlywheelSessionLabel, Version, everything()) %>% 
+#   distinct()
+# 
+# # Look how many duplicates in first and second batch of T1 imports:
+# nrow(ashs_t1) + nrow(ashs_t1_extras)
+# 
+# # rbind second T1 ASHS import to the first:
+# ashs_t1 <- rbind(ashs_t1, ashs_t1_extras)
+# 
+# # Check to see if any duplicates by seeing if lose any rows with distinct()
+# ashs_t1 %>% distinct() %>% nrow()
 
 # Save T1 
 output_file1 <- here("objects/ashs_t1.RDS")
 
 saveRDS(ashs_t1, file = output_file1)
 
-# Save T2 
-output_file2 <- here("objects/ashs_t2.RDS")
+# Import Thickness Data
 
-ashs_t2 <- ashs %>% 
-  filter(Version == '0.2.0') %>% 
-  distinct()
+input_file <- here("data/output_thickness_062723.csv") # this has header in between each row of output
 
-saveRDS(ashs_t2, file = output_file2)
+ashs_thickness_header <- read_csv(input_file) 
+
+ashs_thickness_no_header <- ashs_thickness_header[-seq(2, nrow(df), by = 2), ] # remove every other row starting with second row
+
+# Extract INDDID and FlywheelSessionLabel from ID column
+ashs_thickness <- ashs_thickness_no_header %>% 
+  mutate(INDDID = str_extract(ID, "[0-9]+"),
+         FlywheelSessionLabel = str_extract(ID, "[0-9]+x[0-9]+")) %>% 
+  select(INDDID, FlywheelSessionLabel, everything())
+
+ashs_thickness %<>% janitor::clean_names()
+
+# Convert numeric columns to numeric
+ashs_thickness[, 7:ncol(ashs_thickness)] <- sapply(ashs_thickness[, 7:ncol(ashs_thickness)], as.numeric)
+
+dlookr::diagnose_numeric(ashs_thickness)
+
+ashs_thickness_median <- ashs_thickness %>% select(inddid, flywheel_session_label, side, contains("median"))
+
+saveRDS(ashs_thickness_median, here("objects/ashs_thickness_median.RDS"))
+
+# # Save T2 
+# output_file2 <- here("objects/ashs_t2.RDS")
+# 
+# ashs_t2 <- ashs %>% 
+#   filter(Version == '0.2.0') %>% 
+#   distinct()
+# 
+# saveRDS(ashs_t2, file = output_file2)
+
+# !!!! Import MRI metadata ------------------------
+# Get metadata directly from files used for input to ASHS using the jsons saved in each session directory in /project/ftdc_volumetric/fw_bids/sub-*/ses-*
+
+df <- read_delim(here("data/qc_pass_from_chris_olm/t1_filenames_all20230504_allheaderinfo.txt"),
+           delim = "/n", col_names = F, trim_ws = T) 
+
+df <- df %>% 
+  separate(col = "X1", into = c("col1", "col2"), sep = " ", extra = "merge") %>% 
+  mutate(col1 = str_remove(col1, "^[[:space:]]+"), # remove leading whitespace
+         col2 = str_remove(col2, "^[[:space:]]+")) # remove leading whitespace 
+
+df <- df %>% 
+  separate(col = "col2", into = c("col2", "col3"), sep = "=", extra = "merge") %>% 
+  filter(is.na(col3)==F) %>% 
+  mutate(col2 = as.character(noquote(col2)),
+         col3 = as.numeric(noquote(col3)))
+
+df <- df %>% pivot_wider(names_from = col2, values_from = col3) 
+
+df %<>% clean_names() 
+  
+  # ashs_t1 %>% select(Input) %>% distinct()
+
+# input_file <- here("data/mri_bids_(2022.12.02 11.21).xlsx")
+# 
+# mri_bids_data <- readxl::read_excel(input_file, col_types = "text" ) %>% 
+#   mutate(INDDID = as.character(INDDID))
+# 
+# sessions_ashs <- mri_bids_data %>% select(INDDID, FlywheelSessionLabel) %>% distinct()
+# 
+# # write_csv(sessions_ashs, file= "sessions_info_lbd.csv")
+# 
+# mri_bids_data_2 <- 
+#   mri_bids_data %>% 
+#   select(INDDID, FlywheelSessionLabel, FlywheelProjectLabel, 
+#          FlywheelAcquisitionMeasurement, FlywheelAcquisitionLabel, 
+#          FlywheelAcquisitionFeatures, FlywheelAcquisitionInternalID,
+#          DicomInstitutionName, DicomStationName,
+#          DicomStudyInstanceUID,
+#          DicomSeriesInstanceUID,
+#          DicomSliceThickness, DicomPixelSpacingX, DicomPixelSpacingY,
+#          DicomSequenceName,
+#          DicomMagneticFieldStrength, 
+#          DicomRepetitionTime, 
+#          DicomEchoTime, 
+#          DicomSpacingBetweenSlices, 
+#          FileName,
+#          BIDSFlywheelAcquisitionInternalID,
+#          BidsFilename,
+#          BidsPath,
+#          BidsFolder,
+#          Expr2)
+# 
+# # T1
+# output_file1 <- here("objects/mri_bids_data_t1.RDS")
+# 
+# mri_bids_data_t1 <- mri_bids_data_2 %>% 
+#   filter(FlywheelAcquisitionMeasurement == 'T1')
+# 
+# saveRDS(mri_bids_data_t1, output_file1)
+# 
+# # T2
+# 
+# output_file2 <- here("objects/mri_bids_data_t2.RDS")
+# 
+# mri_bids_data_t2 <- mri_bids_data_2 %>% 
+#   filter(FlywheelAcquisitionMeasurement == 'T2')
+# 
+# saveRDS(mri_bids_data_t2, output_file2)
+
+# T1 images parameters:
+
+input_file1 <- here("data/jesse_t1_params.csv")
+t1_params <- read_csv(input_file1)  %>%  janitor::clean_names()
+
+t1_params$inddid <- as.character(t1_params$subject_1)
+
+# Recode "TrioTim" to "Trio"
+t1_params <- t1_params %>% 
+  mutate(manufacturers_model_name = str_replace(manufacturers_model_name, "TrioTim", "Trio"))
+
+# Group t1_params by manufacterer and model and see typical slice_thickness within each group, using slice thickenss as factor:
+t1_params %>% 
+  group_by(manufacturers_model_name) %>%
+  count(slice_thickness) %>%
+  arrange(desc(n))
+  
+# Group t1_params by manufacterer and model and see average years of scanner within each group:
+# first extract year from session_2 first four digits:
+t1_params <- t1_params %>% 
+  mutate(year = str_sub(session_2, 1, 4)) %>% #convert year to date format
+  mutate(year = as.numeric(year))
+
+# Then group t1_params by manufacterer and model and see average years of scanner within each group:
+t1_params %>% 
+  group_by(manufacturers_model_name) %>%
+  summarise(mean_year = mean(year, na.rm = T)) %>%
+  arrange(desc(mean_year))
+
+# Plot distribution of years for each manufacturer_model_name:
+t1_params %>% 
+  ggplot(aes(x = year, fill = manufacturers_model_name)) +
+  geom_histogram(binwidth = 1) +
+  facet_wrap(~manufacturers_model_name) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+# Collapse names of protocols to fewer categories and list number of rows in each category:
+t1_params %>% 
+  select(manufacturers_model_name, protocol_name, slice_thickness, echo_time, repetition_time) %>% 
+  group_by(manufacturers_model_name, protocol_name, slice_thickness, echo_time, repetition_time) %>%
+  summarise(n = n()) %>%
+  arrange(desc(n)) %>% View()
+
+saveRDS(t1_params, here("objects/t1_params.RDS"))
 
 # Classify all LBD as ad_present or absent: -----------
 
@@ -819,8 +906,8 @@ ashs_wide <- ashs_t1 %>%
   unite(col = region, Hemisphere, Region) %>% 
   select(-Label, -Version) %>%
   distinct() %>% 
-  filter(!(Input == "sub-100066_ses-20070926x1018_BrainSegmentation0N4" &
-             ASHS_import_batch == "2")) %>% # remove duplicate
+#  filter(!(Input == "sub-100066_ses-20070926x1018_BrainSegmentation0N4" &
+#             ASHS_import_batch == "2")) %>% # remove duplicate
   pivot_wider(id_cols = c(INDDID, FlywheelSessionLabel), 
               names_from = region, values_from = Volume)
 
@@ -835,7 +922,7 @@ cases_lacking_ashs <- ad_classification3 %>%
   left_join(original_query) %>% 
   select(INDDID, diagnosis, contains("Flywheel"))
 
-write.csv(cases_lacking_ashs, "reports/ad_classified_lbd_no_ashs.csv")
+write.csv(cases_lacking_ashs, "reports/ad_classified_lbd_no_ashs_after_qc.csv")
 
 # For some reason there was one duplicate ASHS T1 session output with slightly
 # different volumes btwn the first and second run
@@ -978,6 +1065,8 @@ autopsy_csf_mris <- autopsy_intvl_5y_or_more %>%
 autopsy_mris <- rbind(autopsy_mris, autopsy_csf_mris)
 
 n_distinct(autopsy_mris)
+
+write_csv(autopsy_mris[,1:2], "reports/autopsy_mris.csv")
 
 # For PET ---------
 pet_mris <- ad_ashs_dates3 %>%
@@ -1136,6 +1225,111 @@ n_distinct(mri_controls2) - n_distinct(mri_controls$INDDID)
 # 
 # hist(control_time_to_mri$date_diff)
 # 
+
+# Compare old to new ASHS output (i.e. after switching to using "Preprocessed" as input)
+
+input_file <- here("data/ashs_t1_output06012023.txt")
+
+df <- read_delim(file = input_file, 
+                 col_names = c("Input",
+                               "Hemisphere",
+                               "Region",
+                               "Label",
+                               "Volume"))
+
+input_file <- here("data/ashs_t1_output050323_2.txt")
+
+df_old <- read_delim(file = input_file,
+                 col_names = c("Input",
+                               "Hemisphere",
+                               "Region",
+                               "Label",
+                               "Volume"))
+
+# For each input, compare the volumes from the two files by subtracting the volumes from the old file from the volumes from the new file
+# If the difference is not 0, then the volumes are different
+df_new_icv <- df %>% filter(Region == "ICV") %>% select(Input, volume_new = Volume)
+
+# Remove text after last underscore in Input column
+df_new_icv$Input <- str_remove(df_new_icv$Input, "_PreprocessedInput")
+
+df_old_icv <- df_old %>% filter(Region == "ICV") %>% select(Input, volume_old = Volume)
+
+# Remove text after last underscore in Input column
+df_old_icv$Input <- str_remove(df_old_icv$Input, "_BrainSegmentation0N4")
+
+# Calculate difference between volumes
+new_input_icv_difference <- left_join(df_new_icv, df_old_icv) %>% 
+  mutate(volume_diff = volume_new - volume_old)
+
+# For left anterior hippocampus, compare the volumes from the two files by subtracting the volumes from the old file from the volumes from the new file
+df_new_lahip <- df %>% filter(Region == "Anterior_hippocampus" & Hemisphere == "left" ) %>% select(Input, volume_new = Volume)
+
+# Remove text after last underscore in Input column
+df_new_lahip$input <- str_remove(df_new_lahip$Input, "_PreprocessedInput")
+
+df_new_lahip <- df_new_lahip %>% select(-Input)
+
+df_old_lahip <- df_old %>% filter(Region == "Anterior_hippocampus" & Hemisphere == "left") %>% select(Input, volume_old = Volume)
+
+# Remove text after last underscore in Input column
+df_old_lahip$input <- str_remove(df_old_lahip$Input, "_BrainSegmentation0N4")
+
+df_old_lahip <- df_old_lahip %>% select(-Input)
+
+# Calculate difference between volumes
+new_input_lahip_difference <- left_join(df_new_lahip, df_old_lahip) %>% 
+  mutate(volume_diff = volume_new - volume_old) %>%
+  mutate(volume_diff_percent = (volume_new - volume_old)/volume_old*100)
+
+# create new column with inddid from text after "sub-"
+new_input_lahip_difference %<>% 
+  mutate(INDDID = str_extract(input, "(?<=sub-)(.*)(?=_ses)"))
+
+
+# create new column with inddid from text after "sub-"
+new_input_icv_difference %<>% 
+  mutate(INDDID = str_extract(Input, "(?<=sub-)(.*)(?=_ses)"))
+
+# Add new column for percent change in ICV
+new_input_icv_difference %<>% 
+  mutate(volume_diff_percent = (volume_new - volume_old)/volume_old*100)
+
+# Merge icv_diff with diagnosis
+new_input_icv_difference %<>%
+  left_join(diagnosis)
+
+# Summarize icv_diff by diagnosis
+new_input_icv_difference %>% 
+  group_by(diagnosis) %>% 
+  summarise(mean_icv_diff = mean(volume_diff, na.rm = T),
+            n = n())
+
+
+# Merge lahip_diff with diagnosis
+new_input_lahip_difference %<>%
+  left_join(diagnosis) %>%
+  select(INDDID, diagnosis, volume_diff, volume_diff_percent)
+
+new_input_lahip_difference %>% arrange(desc(volume_diff_percent))
+
+# Summarize lahip_diff by diagnosis
+new_input_lahip_difference %>% 
+  group_by(diagnosis) %>% 
+  summarise(mean_lahip_diff = mean(volume_diff, na.rm = T),
+            n = n())
+
+# Remove mri sessions that failed final qc: ---------
+failed_qc <- c("sub-109984_ses-20100518x1211")
+failed_qc_ids <- c(109984) #this sub only had one session available in INDD
+
+#unable to find this session to QC: sub-100896/ses-20050628x1832
+
+# I reviewed the 350 segmentations (/Users/jessecohen/Documents/MTR/lbd_mtl_subfields_1/data/lbdlbdad_sessionsPassedQC_all_04262023.csv)
+# and only 1 failed (109984 as above)
+
+
+cases_to_remove <- union(cases_to_remove, failed_qc_ids)
 # Remove controls with MRI >3 years from enrollment? --------
 # 
 # controls_long_time_to_mri <- control_time_to_mri %>% 
@@ -1446,6 +1640,7 @@ names(which(colSums(is.na(ds))>0)) #these are okay to be NA since these regions 
 # Rearrange variables so age is in front of df
 ds %<>% select(inddid, ad_present, age_at_mri, everything())
 
+ds$age_group <- cut(ds$age_at_mri, breaks = seq(20, 100, 10), right = FALSE)
 
 # Save cleaned dataframe for future use
 saveRDS(ds, "objects/ashs_raw_cleaned.RDS")
@@ -1472,38 +1667,59 @@ saveRDS(ds, "objects/ashs_raw_cleaned.RDS")
 ## No matching; constructing a pre-match matchit object
 # Values of standardized mean differences and eCDF statistics close to zero and values of variance ratios close to one indicate good balance.
 
-
 #remove missing covariates for MatchIt
 ds <- read_rds("objects/ashs_raw_cleaned.RDS")
 d_for_matchit <- ds %>% 
 #  filter(is.na(education)==F) %>% 
   mutate(case_status = ifelse(diagnosis == "Normal", 0, 1)) %>% 
   select(inddid, diagnosis, ad_present, case_status, age_at_mri, flywheel_session_label,
-         race, sex, left_icv, session_year, education)
+         race, sex, left_icv, session_year, education, age_group)
+
+# t1_params <- read_rds(here("objects/t1_params.RDS"))
+
+# # Extract string after "x[d][d][d][d]_" in bids_filename
+# t1_params$filename <- str_extract(string = t1_params$bids_filename, pattern = regex("(?<=x\\d\\d\\d\\d_)(.*)(?=.nii.gz)"))
+
+# # Create simplified filename by removing _run-\d\_ from filename
+# t1_params$filename_simple <- str_remove(string = t1_params$filename, pattern = regex("run-\\d\\_"))
+
+# # Count number of rows for each filename_simple
+# t1_params %>% 
+#   group_by(filename_simple) %>% 
+#   summarize(n = n()) %>% 
+#   arrange(desc(n))
+# 
+# # Collapse as "other" any filename with less than 10 rows using forcats::fct_lump
+# t1_params$filename_simple <- forcats::fct_lump_min(t1_params$filename_simple, min = 20)
+
+saveRDS(t1_params, here("objects/t1_params.RDS"))
+        t1_params$subject_1 <- as.character(t1_params$subject_1) 
+d_for_matchit %<>% left_join(t1_params, by = c("inddid" = "subject_1", "flywheel_session_label" = "session_2"))
 
 m.out0 <- matchit(case_status ~ 
-                    age_at_mri +
-                    race +
+                    age_group +
                     sex +
-                    left_icv +
-                    session_year + 
-                    education,
+                    #education
+                    # manufacturers_model_name
+                    slice_thickness,
                   data = d_for_matchit,
                   method = NULL, distance = "glm")
 
 # Checking balance prior to matching
 summary(m.out0)
+plot(summary(m.out0))
 
 ## 1:1 NN PS matching w/o replacement
 m.out1 <- matchit(case_status ~ 
-                    age_at_mri +
-                    race +
-                    sex +
-                    left_icv + 
-                    session_year +
-                    education,
+                    age_group +
+                    #age_at_mri +
+                    sex #+
+                    #education
+                    # manufacturers_model_name
+                    # slice_thickness
+                    ,
                   data = d_for_matchit,
-                  method = "nearest", distance = "glm",
+                  method = "nearest", replace = FALSE, reuse.max = 2, distance = "glm",
                   ratio = 1,
                   unit.id ="inddid")
 
@@ -1515,91 +1731,122 @@ plot(summary(m.out1))
 library(optmatch)
 library(cobalt)
 # Full matching on a probit PS
-m.out2 <- matchit(case_status ~ 
-                    age_at_mri +
-                    race +
+m.out2 <- matchit(case_status ~
+                    #age_at_mri +
+                    age_group +
                     sex +
-                  #  left_icv + 
-                    session_year +
-                    education,
+                    #+
+                    #education
+                    # filename_simple
+                  # manufacturers_model_name
+                  slice_thickness,
                   data = d_for_matchit,
-                  method = "full", 
-                  distance = "glm", 
+                  method = "full",
+                  distance = "glm",
                   link = "probit",
                   unit.id ="inddid")
 m.out2
 
-## Checking balance after full matching 
+## Checking balance after full matching
 summary(m.out2, un = FALSE)
 plot(summary(m.out2))
+
 
 #Vs partial matching
 plot(summary(m.out1))
 
-plot(m.out2, type = "qq", interactive = FALSE,
-     which.xs = c("age_at_mri", "sex", "session_year"))
+# No difference so will use the simpler NN matching with replacement
 
-#eCDF plot
-plot(m.out2, type = "ecdf", interactive = FALSE,
-     which.xs = c("age_at_mri", "sex", "session_year"))
+# plot(m.out2, type = "qq", interactive = FALSE,
+#      which.xs = c("age_at_mri", "sex", "session_year"))
+# 
+# #eCDF plot
+# plot(m.out2, type = "ecdf", interactive = FALSE,
+#      which.xs = c("age_at_mri", "sex", "session_year"))
+# 
+# #density plot
+# plot(m.out2, type = "density", interactive = FALSE,
+#      which.xs = c("age_at_mri", "sex", "session_year"))
 
-#density plot
-plot(m.out2, type = "density", interactive = FALSE,
-     which.xs = c("age_at_mri", "sex", "session_year"))
+# Matched df using propensity score matching
+# mF <- m.out2
+# md <- match.data(mF) 
 
-# Matched df 
-mF <- m.out2
+# Matched df using 1:1 nearest neighbor with replacement
+mF <- m.out1
 md <- match.data(mF) 
 
-# select highest weighted mri for each control
-md_one_mri_per_control <-
-  md %>%
-  group_by(inddid) %>% 
-  slice_max(weights, with_ties = F) %>% 
-  select(-distance, -weights, -subclass) %>% 
-  ungroup()
+# # select highest weighted mri for each control
+# md_one_mri_per_control <-
+#   md %>%
+#   group_by(inddid) %>% 
+#   slice_max(weights, with_ties = F) %>% 
+#   select(-distance, -weights, -subclass) %>% 
+#   ungroup()
 
-# Rerun weighted matching:
-# Full matching on a probit PS
-m.out3 <- matchit(case_status ~ 
-                    age_at_mri +
-                    race +
-                    sex +
-               #     left_icv + # I think when left_icv is included here we lose to much variance in hippocampal volume/adjusted 
-                    session_year +
-                    education,
-                  data = md_one_mri_per_control,
-                  method = "full", 
-                  distance = "glm", 
-                  link = "probit",
-                  unit.id ="inddid")
+# # Rerun weighted matching:
+# # Full matching on a probit PS
+# m.out3 <- matchit(case_status ~ 
+#                     age_at_mri +
+#                     race +
+#                     sex +
+#                #     left_icv + # I think when left_icv is included here we lose to much variance in hippocampal volume/adjusted 
+#                     session_year +
+#                     education,
+#                   data = md_one_mri_per_control,
+#                   method = "full", 
+#                   distance = "glm", 
+#                   link = "probit",
+#                   unit.id ="inddid")
+# 
+# plot(summary(m.out3))
+# # Still performs very well
 
-plot(summary(m.out3))
-# Still performs very well
+# NN matching works well so will use that:
+mris_matched_cases_and_controls <- match.data(m.out1) 
 
-# Full matching performed much better than NN so will use that:
-mris_matched_cases_and_controls <- match.data(m.out3) 
 
 saveRDS(mris_matched_cases_and_controls, file = "objects/mris_matched_cases_and_controls.RDS")
  
 # Save a copy of IDs and session labels for QC (sent to Chris Olm)
 mri_sessions_for_qc <- mris_matched_cases_and_controls %>% select(inddid, flywheel_session_label)
 
-write.csv(mri_sessions_for_qc, "reports/mri_sessions_for_qc_032423.csv")
+write.csv(mri_sessions_for_qc, "reports/mri_sessions_for_qc.csv")
+
 # Use the same to match LBD+AD with LBD-AD
 d_lbd_for_matchit <- d_for_matchit %>% filter(ad_present!="Control")
 
-# Full matching on a probit PS - for consistency I used the same matching strategy to compare LBD+AD to LBD-AD
-m_lbd <- matchit(ad_present ~ 
+# Before matching:
+m.out0 <- matchit(ad_present ~ 
                     age_at_mri +
-                    race +
                     sex +
-                    #left_icv + 
-                    session_year +
                     education,
                   data = d_lbd_for_matchit,
-                 method = "full", distance = "glm",
-                 link = "probit")
+                  method = NULL, distance = "glm")
+
+# Checking balance prior to matching
+summary(m.out0)
+plot(summary(m.out0))
+
+
+# NN matching with replacement 
+m_lbd <- matchit(ad_present ~ 
+                   age_at_mri +
+                   sex +
+                   education,
+                 data = d_lbd_for_matchit,
+                 method = "nearest", replace = TRUE, distance = "glm",
+                 ratio = 1,
+                 unit.id ="inddid")
+
+# # Full matching on a probit PS - for consistency I used the same matching strategy to compare LBD+AD to LBD-AD
+# m_lbd <- matchit(ad_present ~ 
+#                     age_at_mri +
+#                     sex +
+#                     education,
+#                   data = d_lbd_for_matchit,
+#                  method = "full", distance = "glm",
+#                  link = "probit")
                 
 ## Checking balance after full matching 
 plot(summary(m_lbd))
@@ -1609,7 +1856,6 @@ mris_matched_lbd_w_ad_vs_no_ad <- match.data(m_lbd)
 
 saveRDS(mris_matched_lbd_w_ad_vs_no_ad, file = "objects/mris_matched_lbd_w_ad_vs_no_ad.RDS")
 
-# Use the same to match LBD+AD with LBD-AD
 
 
 # Combine Anterior and posterior hippocampus to make new variable ---------
@@ -1666,7 +1912,50 @@ ds_summed_regions <- ds %>%
          bilat_phc,
          left_icv, 
          everything())
-         
+
+# Merge with thickness data
+
+thickness <- read_rds(here("objects/ashs_thickness_median.RDS"))
+
+# extract date from flywheelsession_label (first 8 characters of the string)
+thickness$session_date <- str_extract(string = thickness$flywheel_session_label, pattern = regex("^[0-9]{8}"))
+
+# Convert to date format
+thickness$session_date <- as.Date(thickness$session_date, format = "%Y%m%d")
+
+# Pivot thickness data longer first collapsing regions into one column
+thickness <- thickness %>% 
+  pivot_longer(cols = -c(inddid, flywheel_session_label, session_date, side), names_to = "region", values_to = "thickness")
+
+# Combine region and side columns into one column
+thickness$region <- str_c(thickness$region, "_", thickness$side)
+
+# Remove side column
+thickness <- thickness %>% select(-side, -flywheel_session_label)
+
+# Then pivot wider (regions into columns)
+thickness <- thickness %>% 
+  pivot_wider(names_from = region, values_from = thickness)
+
+# Merge with ds by inddid and session_date
+ds_summed_regions %<>% left_join(thickness, by = c("inddid", "session_date"))
+
+# Create new columns for thk_adjusted by dividing by left_icv
+ds_summed_regions %<>% mutate(across(contains("thk"), ~ .x/left_icv, .names = "{.col}_adjusted"))
+# Create vector of column names from ds that contain "thk"
+thk_cols <- ds %>% select(contains("thk")) %>% names()
+
+# Mutate new columns by adding together corresponding left and right columns
+ds_summed_regions %<>% mutate(hippo_median_thk_bilateral = hippo_median_thk_left + hippo_median_thk_right,
+erc_median_thk_bilateral = erc_median_thk_left + erc_median_thk_right,
+ba35_median_thk_biateral = ba35_median_thk_left + ba35_median_thk_right,
+ba36_median_thk_biateral = ba36_median_thk_left + ba36_median_thk_right,
+phc_median_thk_biateral = phc_median_thk_left + phc_median_thk_right,
+hippo_median_thk_bilateral_adjusted = hippo_median_thk_left_adjusted + hippo_median_thk_right_adjusted,
+erc_median_thk_bilateral_adjusted = erc_median_thk_left_adjusted + erc_median_thk_right_adjusted,
+ba35_median_thk_biateral_adjusted = ba35_median_thk_left_adjusted + ba35_median_thk_right_adjusted,
+ba36_median_thk_biateral_adjusted = ba36_median_thk_left_adjusted + ba36_median_thk_right_adjusted,
+phc_median_thk_biateral_adjusted = phc_median_thk_left_adjusted + phc_median_thk_right_adjusted)
 
 saveRDS(ds_summed_regions, file = "objects/ashs_summed_regions.RDS")
 
@@ -1835,4 +2124,4 @@ pvlt_cases_with_ashs_and_ad_markers_table <-
   
 n_pvlt_cases_with_ashs_and_ad_markers <-
   pvlt_cases_with_ashs_and_ad_markers$inddid %>% n_distinct() 
-  
+
