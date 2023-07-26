@@ -54,6 +54,8 @@ library(lme4)
 library(ggpubr)
 library(ggstance)
 library(scales)
+library(compareGroups)
+
 
 conflicts_prefer(flextable::font)
 
@@ -90,26 +92,28 @@ file_name <- c("objects/mris_matched_cases_and_controls.RDS") #start with matche
 ds <- read_rds(file = file_name)
 ds$session_year <- as.factor(ds$session_year)
 
-# Use adjusted volumes:
+# Use data frame that includes icv adjusted volumes:
 ashs_summed_icv_adjusted <- read_rds(file = "objects/ashs_summed_adjusted_for_icv.RDS")
 ashs_summed_icv_adjusted$session_year <- as.factor(ashs_summed_icv_adjusted$session_year)
-
-# Use unadjusted volumes
-# ashs_summed <- read_rds(file = "objects/ashs_summed_regions.RDS")
-# ashs_summed$session_year <- as.factor(ashs_summed$session_year)
 
 # Initialise the dataset as per the template.
 dsname <- str_extract(string = file_name,pattern = regex("(?<=objects/)(.*)(?=.RDS)"))
 
-# merge with df of ASHS summed and ICV adjusted output 
+# merge with df of ASHS summed and ICV adjusted output (includes unadjusted too)
 
-# Adjusted
 ds %<>% left_join(ashs_summed_icv_adjusted)
 
-# Unadjusted
-# ds %<>% left_join(ashs_summed)
-
 ds %>% sample_frac()
+
+
+# # Toggle to adjusted volumes by mutating columns like this for each region: mutate(bilat_full_hippocamp = bilat_full_hippocamp_adjusted), etc
+# ds %<>% mutate(bilat_full_hippocamp = bilat_full_hippocamp_adjusted,
+# bilat_ant_hippocamp = bilat_ant_hippocamp_adjusted,
+# bilat_post_hippocamp = bilat_post_hippocamp_adjusted,
+# bilat_erc = bilat_erc_adjusted,
+# bilat_br_35 = bilat_br_35_adjusted,
+# bilat_br_36 = bilat_br_36_adjusted,
+# bilat_phc = bilat_phc_adjusted)
 
 # Create new binary variable for when the date of the MRI was before May 1, 2017 when scanner was upgraded from timtrio # to prisma.
 ds %<>% mutate(ses_pre_may_2017 = session_date < as.Date("2017-05-01"))
@@ -195,43 +199,43 @@ ds %<>% mutate(ses_pre_may_2017 = session_date < as.Date("2017-05-01"))
 ```{r}
 # Quick look at distributions of thickness
 
-ds %>% select(inddid, diagnosis, ad_present, sex, contains("thk")) %>% sample_frac()
+# ds %>% select(inddid, diagnosis, ad_present, sex, contains("thk")) %>% sample_frac()
 
-# Plot all thk variables as histograms
-ds %>% 
-  select(contains("thk"), ad_present) %>% 
-  tidyr::pivot_longer(cols = -ad_present, names_to = "region", values_to = "thickness") %>%
-  ggplot(aes(x = thickness, color = ad_present)) +
-  geom_histogram(bins = 15) +
-  facet_wrap(~region, scales = "free") +
-  theme_bw()
+# # Plot all thk variables as histograms
+# ds %>% 
+#   select(contains("thk"), ad_present) %>% 
+#   tidyr::pivot_longer(cols = -ad_present, names_to = "region", values_to = "thickness") %>%
+#   ggplot(aes(x = thickness, color = ad_present)) +
+#   geom_histogram(bins = 15) +
+#   facet_wrap(~region, scales = "free") +
+#   theme_bw()
 
-# Plot as boxplots by diagnosis
-ds %>% select(contains("thk"), diagnosis) %>% 
-  pivot_longer(cols = -diagnosis, names_to = "region", values_to = "thickness") %>% 
-  ggplot(aes(x = diagnosis, y = thickness)) +
-  geom_boxplot() +
-  geom_jitter(alpha = 0.2) +
-  facet_wrap(~region, scales = "free") +
-  theme_bw()
+# # Plot as boxplots by diagnosis
+# ds %>% select(contains("thk"), diagnosis) %>% 
+#   pivot_longer(cols = -diagnosis, names_to = "region", values_to = "thickness") %>% 
+#   ggplot(aes(x = diagnosis, y = thickness)) +
+#   geom_boxplot() +
+#   geom_jitter(alpha = 0.2) +
+#   facet_wrap(~region, scales = "free") +
+#   theme_bw()
 
-# Plot as boxplots by diagnosis, normalizing thickness by dividing by "left_icv"
-ds %>% select(contains("thk"), diagnosis, left_icv) %>% 
-  pivot_longer(cols = -c(diagnosis, left_icv), names_to = "region", values_to = "thickness") %>% 
-  ggplot(aes(x = diagnosis, y = thickness/left_icv)) +
-  geom_boxplot() +
-  geom_jitter(alpha = 0.2) +
-  facet_wrap(~region, scales = "free") +
-  theme_bw()
+# # Plot as boxplots by diagnosis, normalizing thickness by dividing by "left_icv"
+# ds %>% select(contains("thk"), diagnosis, left_icv) %>% 
+#   pivot_longer(cols = -c(diagnosis, left_icv), names_to = "region", values_to = "thickness") %>% 
+#   ggplot(aes(x = diagnosis, y = thickness/left_icv)) +
+#   geom_boxplot() +
+#   geom_jitter(alpha = 0.2) +
+#   facet_wrap(~region, scales = "free") +
+#   theme_bw()
 
-# Plot as boxplots by ad_present, normalizing thickness by dividing by left_icv
-ds %>% select(contains("thk"), ad_present, left_icv) %>% 
-  pivot_longer(cols = -c(ad_present, left_icv), names_to = "region", values_to = "thickness") %>% 
-  ggplot(aes(x = ad_present, y = thickness/left_icv)) +
-  geom_boxplot() +
-  geom_jitter(alpha = 0.2) +
-  facet_wrap(~region, scales = "free") +
-  theme_bw()
+# # Plot as boxplots by ad_present, normalizing thickness by dividing by left_icv
+# ds %>% select(contains("thk"), ad_present, left_icv) %>% 
+#   pivot_longer(cols = -c(ad_present, left_icv), names_to = "region", values_to = "thickness") %>% 
+#   ggplot(aes(x = ad_present, y = thickness/left_icv)) +
+#   geom_boxplot() +
+#   geom_jitter(alpha = 0.2) +
+#   facet_wrap(~region, scales = "free") +
+#   theme_bw()
 
 # # Create new columns for thk_adjusted by dividing by left_icv
 # ds %<>% mutate(across(contains("thk"), ~ .x/left_icv, .names = "{.col}_adjusted"))
@@ -257,44 +261,44 @@ ds %>% select(contains("adjusted")) %>%
 ```
 
 ```{r}
-# Merge with T1 acquisition parameters to look for batch effects
+# # Merge with T1 acquisition parameters to look for batch effects
 
-t1_params <- read_rds(here("objects/t1_params.RDS"))
+# t1_params <- read_rds(here("objects/t1_params.RDS"))
 
-# ds %<>% left_join(t1_params)
+# # ds %<>% left_join(t1_params)
 
-# Look at only cases to see if there is an effect of protocol
-# ds %<>% filter(diagnosis != "Normal")
+# # Look at only cases to see if there is an effect of protocol
+# # ds %<>% filter(diagnosis != "Normal")
 
-# Mean icv volume by filename_simple
-ds %>% 
-  group_by(slice_thickness) %>% 
-  summarize(mean_icv = mean(left_icv)) %>% 
-  arrange(desc(mean_icv))
+# # Mean icv volume by filename_simple
+# ds %>% 
+#   group_by(slice_thickness) %>% 
+#   summarize(mean_icv = mean(left_icv)) %>% 
+#   arrange(desc(mean_icv))
 
 ds$manufacturers_model_name <- as.factor(ds$manufacturers_model_name)
 
 # See if slice thickeness predicts icv after controlling for sex and age in linear regression
 summary(lm(left_icv ~ (manufacturers_model_name=="Trio") + slice_thickness + (year<2017) + age_at_mri + ad_present, data = ds[ds$sex=="Male",]))
 
-# Plot counts of manufacters_model_name by ad_present groups
-ggplot(data = ds, aes(x = manufacturers_model_name, fill = ad_present)) +
-  geom_bar() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
-  labs(x = "manufacturers_model_name", y = "Count")
+# # Plot counts of manufacters_model_name by ad_present groups
+# ggplot(data = ds, aes(x = manufacturers_model_name, fill = ad_present)) +
+#   geom_bar() +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+#   labs(x = "manufacturers_model_name", y = "Count")
 
-# Plot average left_anterior_hippocampus by manufacturers_model_name
-ggplot(data = ds, aes(x = manufacturers_model_name, y = left_anterior_hippocampus, color = ad_present)) +
-  geom_jitter(alpha = 0.8) +
-  geom_boxplot(alpha = 0.2) +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
-  labs(x = "manufacturers_model_name", y = "Left Anterior Hippocampus")
+# # Plot average left_anterior_hippocampus by manufacturers_model_name
+# ggplot(data = ds, aes(x = manufacturers_model_name, y = left_anterior_hippocampus, color = ad_present)) +
+#   geom_jitter(alpha = 0.8) +
+#   geom_boxplot(alpha = 0.2) +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+#   labs(x = "manufacturers_model_name", y = "Left Anterior Hippocampus")
 
-# Plot average left_anterior_hippocampus by slice_thickness
-ggplot(data = ds, aes(x = as.factor(slice_thickness), y = left_anterior_hippocampus, color = ad_present)) +
-  geom_jitter(alpha = 0.8) +
-  geom_boxplot(alpha = 0.2) +
-  labs(x = "slice_thickness", y = "Left Anterior Hippocampus")
+# # Plot average left_anterior_hippocampus by slice_thickness
+# ggplot(data = ds, aes(x = as.factor(slice_thickness), y = left_anterior_hippocampus, color = ad_present)) +
+#   geom_jitter(alpha = 0.8) +
+#   geom_boxplot(alpha = 0.2) +
+#   labs(x = "slice_thickness", y = "Left Anterior Hippocampus")
 
 # Test whether there is association between filename_simple and ad_present using t-test
 # t.test(bilat_full_hippocamp ~ filename_simple=="T1w", data = ds)
@@ -345,55 +349,55 @@ ggplot(data = ds, aes(x = as.factor(slice_thickness), y = left_anterior_hippocam
 ```
 
 ```{r , include=TRUE}
-library(DT)
-DT::datatable(ds)
+# library(DT)
+# DT::datatable(ds)
 ```
 
 # Results
 
 ```{r Density Plots numerical variables, results = 'asis', eval=FALSE}
-## Density Plots numerical variables
-ds %>%
-  keep(is.numeric) %>%                     # Keep only numeric columns
-  gather() %>%                             # Convert to key-value pairs
-  ggplot(aes(value)) +  
-  theme(axis.text.x = element_text(size = 4)) +
-  facet_wrap(~ key, scales = "free") +   # In separate panels
-    geom_histogram() + 
-  theme(strip.text.x = element_text(size = 6))
+# ## Density Plots numerical variables
+# ds %>%
+#   keep(is.numeric) %>%                     # Keep only numeric columns
+#   gather() %>%                             # Convert to key-value pairs
+#   ggplot(aes(value)) +  
+#   theme(axis.text.x = element_text(size = 4)) +
+#   facet_wrap(~ key, scales = "free") +   # In separate panels
+#     geom_histogram() + 
+#   theme(strip.text.x = element_text(size = 6))
 
 
-regions_to_keep <- c("yob", "education", "left_anterior_hippocampus")
+# regions_to_keep <- c("yob", "education", "left_anterior_hippocampus")
 
-ds %>% 
-  colnames() %>%
-  str_extract_all(".*_adjusted")
+# ds %>% 
+#   colnames() %>%
+#   str_extract_all(".*_adjusted")
   
-quick_boxplots <- function(df, nvars) {
-  df %>%
-  select({(nvars)}) %>% 
-    pivot_longer(cols = {{nvars}}) %>% 
-    ggplot(aes(value)) +  
-  theme(axis.text.x = element_text(size = 4)) +
-  facet_wrap(~ name, scales = "free") +   # In separate panels
-    geom_histogram() + 
-  theme(strip.text.x = element_text(size = 6))
-}
+# quick_boxplots <- function(df, nvars) {
+#   df %>%
+#   select({(nvars)}) %>% 
+#     pivot_longer(cols = {{nvars}}) %>% 
+#     ggplot(aes(value)) +  
+#   theme(axis.text.x = element_text(size = 4)) +
+#   facet_wrap(~ name, scales = "free") +   # In separate panels
+#     geom_histogram() + 
+#   theme(strip.text.x = element_text(size = 6))
+# }
 
-ds %>%
-  sapply(is.character) %>%
-  which()  ->
-chari
+# ds %>%
+#   sapply(is.character) %>%
+#   which()  ->
+# chari
 
-# Identify the character variables by name.
+# # Identify the character variables by name.
 
-ds %>% 
-  names() %>% 
-  '['(chari) ->
-charc
+# ds %>% 
+#   names() %>% 
+#   '['(chari) ->
+# charc
 
 
-quick_boxplots(ds, regions_to_keep)
+# quick_boxplots(ds, regions_to_keep)
 # #  %>%                     # Keep only numeric columns
 #   pivot_longer() %>%         # Convert to key-value pairs
 #   ggplot(aes(value)) +  
@@ -464,22 +468,417 @@ table_1 <- table1(~ age_at_mri + sex + race + education + diagnosis + ad_marker|
 
 table_1
 
-conflicts_prefer(flextable::as_flextable)
-# Output to word document
-table_1 %>% as_tibble() %>%
-  as_flextable() %>% 
-  set_caption(caption) %>% 
-  theme_booktabs() %>% 
-  theme_box() %>% 
-  autofit() %>% 
-  align(align = "center", part = "all") %>% 
-  align(align = "left", part = "header") %>% 
-  align(align = "left", part = "body") %>% 
-  bold(part = "header") %>% 
-  font(fontname = "Times New Roman", part = "all") %>% 
-  fontsize(size = 8, part = "all") %>% 
-  autofit() 
+summary(compareGroups(ad_present ~ . , data = ds[1:    5]))
+
 ```
+
+```{r}
+# Add in mmse
+
+mmse <- read_rds(here("objects/clinical_testing/mmse.RDS")) %>% clean_names()
+
+# Remove rows with missing values for MMSETotal
+mmse <- mmse %>% filter(!is.na(mmse_total))
+
+# Match mmse to ds
+# Take mmse closest to MRI within 1 year 
+
+mri_dates <- ds %>% select(inddid, session_date)
+
+mri_dates$session_date %<>% lubridate::as_datetime()
+
+mmse_mri <- left_join(mri_dates, mmse) %>% 
+  mutate(date_diff = session_date - test_date) %>% 
+  group_by(inddid) %>% 
+  filter(abs(date_diff)==min(abs(date_diff))) %>% 
+  slice_head() %>% 
+  select(inddid, session_date, test_date, mmse_total, date_diff) %>% 
+  ungroup()
+
+mmse_mri$date_diff %<>% as.numeric()
+
+mmse_mri$date_diff <- mmse_mri$date_diff/86400
+
+mmse_mri[abs(mmse_mri$date_diff) < 366,] %>% pull(mmse_total) %>% hist()
+
+# Rejoin to original dataframe
+
+ds %<>% left_join(mmse_mri)
+```
+
+```{r}
+# Add in updrs to make tremor correction
+
+updrs <- readxl::read_xlsx(here("data/updrs_2023.07.24 14.55).xlsx")) %>% janitor::clean_names() %>% 
+mutate(inddid = as.character(inddid))
+
+# List all column names containing string "trm"
+tremor_columns <- updrs %>% 
+  colnames() %>%
+  str_extract_all(".*trm.*") %>%
+  unlist()
+
+# Create new column adding together tremor scores adding together all columns in tremor_columns
+updrs %<>% mutate(trm_total = rowSums(dplyr::select(updrs, all_of(tremor_columns))))
+
+updrs %>% select(inddid, trm_total) %>% arrange(desc(trm_total))
+
+# Make sure it correlates with underlying score
+updrs %>% select(trm_total, p3rtrmrf) %>% plot()
+
+updrs %>% pull(trm_total) %>% hist()
+
+# Match updrs to ds
+# First convert dates to correct format
+updrs$visit_date %<>% lubridate::as_datetime()
+
+# Remove NAs from updrs
+updrs %<>% filter(!is.na(trm_total))
+
+# select relevant columns for matching
+updrs %<>% select(inddid, visit_date, trm_total)
+
+# Match updrs to ds
+# Take updrs closest to MRI within 1 year
+ds %<>% left_join(updrs) %>% 
+  mutate(date_diff_updrs = session_date - visit_date) %>% 
+  group_by(inddid) %>% 
+  filter(abs(date_diff_updrs)==min(abs(date_diff_updrs)) | is.na(abs(date_diff_updrs))) %>% # don't get rid of columns with no value for date_diff
+  slice_head() %>% 
+  ungroup()
+
+# Convert date_diff_updrs to days from seconds
+ds$date_diff_updrs <- as.numeric(ds$date_diff_updrs)/86400
+
+# Convert trm_total and date_diff_updrs to NA if abs > 365*2
+ds %<>% mutate(trm_total = ifelse(abs(date_diff_updrs) > (365*2), NA, trm_total))
+
+# If trm_total is NA, set to 0
+ ds %<>% mutate(trm_total = ifelse(is.na(trm_total), 0, trm_total))
+
+# Plot correlation of trm_total with left_icv
+ds %>% select(trm_total, left_icv) %>% plot()
+
+# calculate lm of left_icv with trm_total as predictor
+summary(lm(left_icv ~ trm_total, data = ds))
+
+summary(lm(bilat_full_hippocamp ~ trm_total + left_icv, data = ds))
+```
+
+```{r}
+# Calculate w-scores for each region
+
+#w-score method:
+
+#a. calculate the effect of age and sex on region volume/thickness in the HC group (volume/thickness = a + (b * age) + (c * sex))
+# Create a data frame for the control group
+control_regions <- ds %>% filter(ad_present == "Control") 
+
+# Create a data frame for the patient group
+patient_regions <- ds %>% filter(ad_present != "Control")
+
+mod_controls <- lm(bilat_full_hippocamp ~ age_at_mri + sex, data = control_regions, weights = weights)
+
+
+
+#b. predict region measure in the patient group based on the regression coefficients we found in the HC group
+# Get the regression coefficients from the model fit to the HC group
+coefs <- coef(mod_controls)
+
+# Predict the region measure in the patient group based on the regression coefficients
+predictions <- predict(mod_controls, newdata = patient_regions)
+
+#c. for each patient, subtract this predicted vol from his actual vol, and divide by the SD of the HC’s residuals (w-score = (vol.obs – vol.pred)/SDres)
+
+# Calculate the residuals from the model fit to the HC group
+residuals <- mod_controls$residuals
+
+# Calculate the SD of the residuals
+sd_residuals <- sd(residuals)
+
+# Calculate the w-scores for the patient group
+w_scores <- (patient_regions$bilat_full_hippocamp - predictions) / sd_residuals
+
+# Print the w-scores
+print(w_scores)
+
+patient_regions_2 <- cbind(patient_regions, w_scores)
+
+# Join with ds by inddid and session_date
+ds_cases_only <- ds %>% filter(ad_present != "Control") %>% left_join(patient_regions_2)
+
+# Plot w-scores by ad_present, include p-value from t-test
+ggplot(data = ds_cases_only, aes(x = ad_present, y = w_scores)) +
+  geom_jitter(alpha = 0.2) +
+  geom_boxplot(alpha = 0.2) +
+  labs(x = "ad_present", y = "w-scores")
+
+# T.test of w-scores by ad_present
+t.test(w_scores ~ ad_present, data = ds_cases_only)
+
+#d. perform a regression in which w-score is correlated with CSF ttau (csf ttau = a + (b * w-score))
+csf_cases
+
+# Match csf_cases to ds by inddid then select the CSFDate closest to session_date
+ds_csf <- ds_cases_only %>% left_join(csf_cases) %>% 
+  mutate(date_diff_csf = session_date - CSFDate) %>% 
+  group_by(inddid) %>% 
+  filter(abs(date_diff_csf)==min(abs(date_diff_csf)) | is.na(abs(date_diff_csf))) %>% # don't get rid of columns with no value for date_diff
+  slice_head() %>% 
+  ungroup()
+
+# Fit a linear regression model to the w-scores and CSF ttau
+mod_wscore <- lm(w_scores ~ ttau, ds_csf)
+
+# Repeat this for each of the 
+regions <- c("bilat_full_hippocamp", 
+"bilat_ant_hippocamp",
+"bilat_post_hippocamp", 
+"erc_median_thk_bilateral",
+"ba35_median_thk_biateral",
+"ba36_median_thk_biateral",
+"phc_median_thk_biateral")
+
+# Use a for loop to calculate w-scores for each region, starting from a. above
+# Calculate the w-scores for the patient group
+for (region in regions) {
+  formula <- as.formula(paste(region, "~ age_at_mri + sex"))
+mod_controls <- lm(formula, data = control_regions, weights = weights)
+
+#b. predict region measure in the patient group based on the regression coefficients we found in the HC group
+# Get the regression coefficients from the model fit to the HC group
+coefs <- coef(mod_controls)
+
+# Predict the region measure in the patient group based on the regression coefficients
+predictions <- predict(mod_controls, newdata = patient_regions)
+
+#c. for each patient, subtract this predicted vol from his actual vol, and divide by the SD of the HC’s residuals (w-score = (vol.obs – vol.pred)/SDres)
+
+# Calculate the residuals from the model fit to the HC group
+residuals <- mod_controls$residuals
+
+# Calculate the SD of the residuals
+sd_residuals <- sd(residuals)
+
+# Calculate the w-scores for the patient group
+w_scores <- (patient_regions[ , region] - predictions) / sd_residuals
+
+w_scores_all[region] <- w_scores
+} 
+
+w_scores_all %<>% rename_with(~ paste0(.x , "_w_score"))
+  
+patient_regions_2 <- cbind(patient_regions, w_scores_all)
+  
+# Join with ds by inddid and session_date
+ds_cases_only <- ds %>% filter(ad_present != "Control") %>% left_join(patient_regions_2)
+
+```
+
+```{r}
+# Plot results
+ggplot(data = ds_cases_only, aes(x = ad_present, y = bilat_full_hippocamp_w_score)) +
+    geom_jitter(alpha = 0.2) +
+    geom_boxplot(alpha = 0.2) +
+    labs(x = "ad_present", y = "w-scores")
+  
+# T.test of w-scores by ad_present
+  t.test(bilat_full_hippocamp_w_score ~ ad_present, data = ds_cases_only)
+  
+
+ggplot(data = ds_cases_only, aes(x = ad_present, y = bilat_ant_hippocamp_w_score)) +
+    geom_jitter(alpha = 0.2) +
+    geom_boxplot(alpha = 0.2) +
+    labs(x = "ad_present", y = "w-scores")
+  
+# T.test of w-scores by ad_present
+  t.test(bilat_ant_hippocamp_w_score ~ ad_present, data = ds_cases_only)
+
+
+ggplot(data = ds_cases_only, aes(x = ad_present, y = bilat_post_hippocamp_w_score)) +
+    geom_jitter(alpha = 0.2) +
+    geom_boxplot(alpha = 0.2) +
+    labs(x = "ad_present", y = "w-scores")
+  
+# T.test of w-scores by ad_present
+  t.test(bilat_post_hippocamp_w_score ~ ad_present, data = ds_cases_only)
+
+ggplot(data = ds_cases_only, aes(x = ad_present, y = erc_median_thk_bilateral_w_score)) +
+    geom_jitter(alpha = 0.2) +
+    geom_boxplot(alpha = 0.2) +
+    labs(x = "ad_present", y = "w-scores")
+  
+# T.test of w-scores by ad_present
+  t.test(erc_median_thk_bilateral_w_score ~ ad_present, data = ds_cases_only)
+  
+
+ggplot(data = ds_cases_only, aes(x = ad_present, y = ba35_median_thk_biateral_w_score)) +
+    geom_jitter(alpha = 0.2) +
+    geom_boxplot(alpha = 0.2) +
+    labs(x = "ad_present", y = "w-scores")
+  
+# T.test of w-scores by ad_present
+  t.test(ba35_median_thk_biateral_w_score ~ ad_present, data = ds_cases_only)
+  
+
+ggplot(data = ds_cases_only, aes(x = ad_present, y =ba36_median_thk_biateral_w_score)) +
+    geom_jitter(alpha = 0.2) +
+    geom_boxplot(alpha = 0.2) +
+    labs(x = "ad_present", y = "w-scores")
+  
+# T.test of w-scores by ad_present
+  t.test(ba36_median_thk_biateral_w_score ~ ad_present, data = ds_cases_only)  
+
+ggplot(data = ds_cases_only, aes(x = ad_present, y = phc_median_thk_biateral_w_score)) +
+    geom_jitter(alpha = 0.2) +
+    geom_boxplot(alpha = 0.2) +
+    labs(x = "ad_present", y = "w-scores")
+  
+# T.test of w-scores by ad_present
+  t.test(phc_median_thk_biateral_w_score ~ ad_present, data = ds_cases_only)
+  
+  
+#d. perform a regression in which w-score is correlated with CSF ttau (csf ttau = a + (b * w-score))
+  csf_cases
+  
+# Match csf_cases to ds by inddid then select the CSFDate closest to session_date
+  ds_csf <- ds_cases_only %>% left_join(csf_cases) %>% 
+    mutate(date_diff_csf = session_date - csf_date) %>% 
+    group_by(inddid) %>% 
+    filter(abs(date_diff_csf)==min(abs(date_diff_csf)) | is.na(abs(date_diff_csf))) %>% # don't get rid of columns with no value for date_diff
+    slice_head() %>% 
+    ungroup()
+  
+  # Fit a linear regression model to the w-scores and CSF ttau
+mod_wscore_full_hipp <- lm(bilat_full_hippocamp_w_score ~ ttau, ds_csf)
+  summary(mod_wscore_full_hipp)
+
+# Plot w-scores by ttau, include r-squared and p value
+ggplot(data = ds_csf, aes(x = ttau, y = bilat_full_hippocamp_w_score, color = ad_present)) +
+  geom_jitter(alpha = 0.2) +
+  geom_smooth(method = "lm") +
+  labs(x = "ttau", y = "w-scores", title = "Bilateral Hippocampus") +
+  stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 1) +
+  stat_cor(aes(color = ad_present, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top") 
+
+# Ant Hipp
+mod_wscore_ant_hipp <- lm(bilat_ant_hippocamp_w_score ~ ttau, ds_csf)
+  summary(mod_wscore_ant_hipp)
+
+# Plot w-scores by ttau, include r-squared and p value
+ggplot(data = ds_csf, aes(x = ttau, y = bilat_ant_hippocamp_w_score, )) +
+  geom_jitter(alpha = 0.2) +
+  geom_smooth(method = "lm") +
+  labs(x = "ttau", y = "w-scores", title = "Anterior Hippocampus") +
+  stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 1) +
+  stat_cor(aes(color = ad_present, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top") 
+
+# Post Hipp
+mod_wscore_post_hipp <- lm(bilat_post_hippocamp_w_score ~ ttau, ds_csf)
+  summary(mod_wscore_post_hipp)
+
+# Plot w-scores by ttau, include r-squared and p value
+ggplot(data = ds_csf, aes(x = ttau, y = bilat_post_hippocamp_w_score)) +
+  geom_jitter(alpha = 0.2) +
+  geom_smooth(method = "lm") +
+  labs(x = "ttau", y = "w-scores", title = "Posterior Hippocampus") +
+  stat_cor(method = "pearson", label.x = 0.5, label.y = 0.5) + 
+  stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 1) +
+  stat_cor(aes(color = ad_present, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top") 
+
+  
+# ERC
+mod_wscore_erc <- lm(erc_median_thk_bilateral_w_score ~ ttau, ds_csf)
+  summary(mod_wscore_erc)
+
+# Plot w-scores by ttau, include r-squared and p value
+ggplot(data = ds_csf, aes(x = ttau, y = erc_median_thk_bilateral_w_score)) +
+  geom_jitter(alpha = 0.2) +
+  geom_smooth(method = "lm") +
+  labs(x = "ttau", y = "w-scores", title = "Entorhinal Cortex") +
+  stat_cor(method = "pearson", label.x = 0.5, label.y = 0.5)
+
+# BA35
+mod_wscore_ba35 <- lm(ba35_median_thk_biateral_w_score ~ ttau, ds_csf)
+  summary(mod_wscore_ba35)
+
+# Plot w-scores by ttau, include r-squared and p value
+ggplot(data = ds_csf, aes(x = ttau, y = ba35_median_thk_biateral_w_score)) +
+  geom_jitter(alpha = 0.2) +
+  geom_smooth(method = "lm") +
+  labs(x = "ttau", y = "w-scores", title = "BA35") +
+  stat_cor(method = "pearson", label.x = 0.5, label.y = 0.5)
+
+# BA36
+mod_wscore_ba36 <- lm(ba36_median_thk_biateral_w_score ~ ttau, ds_csf)
+  summary(mod_wscore_ba36)
+
+# Plot w-scores by ttau, include r-squared and p value
+ggplot(data = ds_csf, aes(x = ttau, y = ba36_median_thk_biateral_w_score)) +
+  geom_jitter(alpha = 0.2) +
+  geom_smooth(method = "lm") +
+  labs(x = "ttau", y = "w-scores", title = "BA36") +
+  stat_cor(method = "pearson", label.x = 0.5, label.y = 0.5)
+
+# PHC
+mod_wscore_phc <- lm(phc_median_thk_biateral_w_score ~ ttau, ds_csf)
+  summary(mod_wscore_phc)
+
+# Plot w-scores by ttau, include r-squared and p value
+ggplot(data = ds_csf, aes(x = ttau, y = phc_median_thk_biateral_w_score)) +
+  geom_jitter(alpha = 0.2) +
+  geom_smooth(method = "lm") +
+  labs(x = "ttau", y = "w-scores", title = "PHC") +
+  stat_cor(method = "pearson", label.x = 0.5, label.y = 0.5)
+
+```
+
+```{r}
+# # Add in Tremor correction
+
+# # Match updrs to ds
+# # First convert dates to correct format
+# updrs$visit_date %<>% lubridate::as_datetime()
+
+# # Remove NAs from updrs
+# updrs %<>% filter(!is
+
+```
+
+
+```{r}
+# Merge ds with fmri scan data, sheet 1 
+
+fmri <- readxl::read_xlsx(here("data/fmri_sessions_2023.07.24 15.46).xlsx")) %>% 
+janitor::clean_names()  %>% mutate(inddid = as.character(inddid)) %>% 
+select(inddid,  flywheel_session_date_fmri = flywheel_session_date)
+
+# Merge with ds
+ds %<>% left_join(fmri)
+
+# calculate date_diff between fmri and mri
+ds %<>% mutate(date_diff_fmri = session_date - flywheel_session_date_fmri)
+
+# Convert date_diff_fmri to years from seconds
+ds$date_diff_fmri <- as.numeric(ds$date_diff_fmri)/86400/365
+
+# Select closest fmri scan to MRI within 5 years
+ds %<>% group_by(inddid) %>% 
+  filter(abs(date_diff_fmri)==min(abs(date_diff_fmri)) | is.na(abs(date_diff_fmri))) %>% 
+  slice_head() %>% 
+  ungroup()
+
+hist(ds$date_diff_fmri)
+
+# Include only fmri scans within 5 years of MRI
+ds %<>% mutate(fmri_within_5_years = ifelse(abs(date_diff_fmri) < 2, 1, 0)) 
+
+ds %>% select(fmri_within_5_years) %>% table()
+
+# Export list of fmri session dates for Stanley to check motion on
+ds %>% select(inddid, flywheel_session_date_fmri) %>% write_csv(here("reports/fmri_sessions.csv"))
+```
+
 
 ```{r, include=TRUE, echo=FALSE}
 
@@ -495,24 +894,17 @@ write_csv(cases_ids_sessions, here("reports/cases_ids_sessions.csv"))
 
 ```{r print table 1 - Cases only, include=TRUE, echo=FALSE}
 df_tbl1_marker <- ds %>% 
-  #filter(diagnosis!="Normal") %>% 
+  filter(diagnosis!="Normal") %>% 
   select(age_at_mri, sex, race, diagnosis, education, ad_marker, ad_present)
 
 diagnose(df_tbl1_marker)
 
 table_1_cases <- table1(~ age_at_mri + sex + race +  diagnosis + education + ad_marker | ad_present, data = df_tbl1_marker)
 
-table_1_cases
-
-# Add column of p-values for comparisons between AD+ and AD- across demographic variables
 table_1_cases 
 
-install.packages("compareGroups")
 
-# Load the necessary packages
-library(compareGroups)
-
-compareGroups(ad_present ~ . , data = df_tbl1_marker)
+summary(compareGroups(ad_present ~ . , data = df_tbl1_marker))
 
 # Generate table1 summary
 table_1_cases <- table1(~ age_at_mri + sex + race + diagnosis + education + ad_marker | ad_present, data = df_tbl1_marker)
@@ -520,9 +912,6 @@ table_1_cases <- table1(~ age_at_mri + sex + race + diagnosis + education + ad_m
 # Print the updated table
 table_1_cases
 
-```
-
-```{r, include=TRUE, echo=FALSE}
 ```
 
 ```{r}
@@ -536,12 +925,12 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
 ds 
 
 ggplot(ds) +
-  aes(x = ad_present, y = bilat_full_hippocamp_adjusted, color = ad_present) +
+  aes(x = ad_present, y = bilat_full_hippocamp, color = ad_present) +
   geom_jitter() +
   theme(legend.position = "none")
 
 # check normality
-res_aov <- aov(bilat_full_hippocamp_adjusted ~ ad_present,
+res_aov <- aov(bilat_full_hippocamp ~ ad_present,
   data = ds
 )
 
@@ -553,26 +942,26 @@ hist(res_aov$residuals)
 # Equality of variances - homogeneity
 
 # Boxplot
-boxplot(bilat_full_hippocamp_adjusted ~ ad_present,
+boxplot(bilat_full_hippocamp ~ ad_present,
   data = ds
 )
 
 # Dotplot
-dotplot(bilat_full_hippocamp_adjusted ~ ad_present,
+dotplot(bilat_full_hippocamp ~ ad_present,
   data = ds
 )
 
 group_by(ds, ad_present) %>%
   summarise(
-    mean = mean(bilat_full_hippocamp_adjusted, na.rm = TRUE),
-    sd = sd(bilat_full_hippocamp_adjusted, na.rm = TRUE)
+    mean = mean(bilat_full_hippocamp, na.rm = TRUE),
+    sd = sd(bilat_full_hippocamp, na.rm = TRUE)
   )
 
 
 # Are hippocampal volumes different between the three groups 
 
-# Anova
-res_aov <- aov(bilat_full_hippocamp_adjusted ~ ad_present,
+# Anova (unadjusted for covariates)
+res_aov <- aov(bilat_full_hippocamp ~ ad_present,
   data = ds
 )
 
@@ -595,12 +984,12 @@ summary(post_test)
 
 ds_cases <- ds %>% filter(ad_present != "Control")
 ggplot(ds_cases) +
-  aes(x = ad_present, y = bilat_full_hippocamp_adjusted, color = ad_present) +
+  aes(x = ad_present, y = bilat_full_hippocamp, color = ad_present) +
   geom_jitter() +
   theme(legend.position = "none")
 
 # check normality
-res_aov <- aov(bilat_full_hippocamp_adjusted ~ ad_present,
+res_aov <- aov(bilat_full_hippocamp ~ ad_present,
   data = ds_cases
 )
 
@@ -613,33 +1002,33 @@ hist(res_aov$residuals)
 # one sample variance is no larger than twice the size of the other)
 
 # Boxplot
-boxplot(bilat_full_hippocamp_adjusted ~ ad_present,
+boxplot(bilat_full_hippocamp ~ ad_present,
   data = ds_cases
 )
 
 # Dotplot
-dotplot(bilat_full_hippocamp_adjusted ~ ad_present,
+dotplot(bilat_full_hippocamp ~ ad_present,
   data = ds_cases
 )
 
 group_by(ds_cases, ad_present) %>%
   summarise(
-    mean = mean(bilat_full_hippocamp_adjusted, na.rm = TRUE),
-    sd = sd(bilat_full_hippocamp_adjusted, na.rm = TRUE)
+    mean = mean(bilat_full_hippocamp, na.rm = TRUE),
+    sd = sd(bilat_full_hippocamp, na.rm = TRUE)
   )
 
 
 # Are hippocampal volumes different between the  groups 
 
 # T test
-t_test <- t.test(bilat_full_hippocamp_adjusted ~ ad_present,
+t_test <- t.test(bilat_full_hippocamp ~ ad_present,
   data = ds_cases, var.equal = TRUE
 )
 
 t_test
 
 # Anova (uncorrected for unequal variances) 
-res_aov <- aov(bilat_full_hippocamp_adjusted ~ ad_present,
+res_aov <- aov(bilat_full_hippocamp ~ ad_present,
   data = ds_cases
 )
 
@@ -651,22 +1040,22 @@ summary(res_aov)
 
 ```{r include=T, echo=TRUE}
 # Comparing controls and cases 
-fit <- lm(bilat_full_hippocamp_adjusted  ~
+fit <- lm(bilat_full_hippocamp  ~
             ad_present +
             age_at_mri +
                     sex +
-                    education #+
+                    education +
+            left_icv, #+
           #  filename_simple
           #  diagnosis
-          ,
           data = ds, weights = weights)
 
 
-summary(fit) %>% coef()
+summary(fit)
 
 
 # Add interactions to model for significant covariates 
-fit_interactions <- lm(bilat_full_hippocamp_adjusted ~
+fit_interactions <- lm(bilat_full_hippocamp ~
             ad_present +
             age_at_mri +
                     # race +
@@ -694,7 +1083,7 @@ anova(fit, fit_interactions)
 
 
 # Fit the linear regression model
-fit <- lm(bilat_full_hippocamp_adjusted ~ ad_present + age_at_mri + sex + education, data = ds, weights = weights)
+fit <- lm(bilat_full_hippocamp ~ ad_present + age_at_mri + sex + education, data = ds, weights = weights)
 
 emm1<-emmeans(fit, specs = pairwise ~ ad_present, 
               adjust = "none"
@@ -741,39 +1130,39 @@ ggplot_the_response(fit, fit_emm = emm1$emmeans, fit_pairs = emm1$contrasts,
 # All subfields
 # Define a function to fit the linear model for each response variable
 fit_lm <- function(response_var, data, weights) {
-  formula <- as.formula(paste(response_var, "~ ad_present + age_at_mri + race + sex + education"))
+  formula <- as.formula(paste(response_var, "~ ad_present + age_at_mri + sex + education"))
   lm(formula, data = data, weights = weights)
 }
 
-regions <- c(#"bilat_full_hippocamp_adjusted", 
-#"bilat_ant_hippocamp_adjusted",
- #            "bilat_post_hippocamp_adjusted", 
-             "erc_median_thk_bilateral_adjusted",
-"ba35_median_thk_biateral_adjusted",
-"ba36_median_thk_biateral_adjusted",
-"phc_median_thk_biateral_adjusted")
+regions <- c(#"bilat_full_hippocamp", 
+#"bilat_ant_hippocamp",
+ #            "bilat_post_hippocamp", 
+             "erc_median_thk_bilateral",
+"ba35_median_thk_biateral",
+"ba36_median_thk_biateral",
+"phc_median_thk_biateral")
 
-titles <- c(#"bilat_full_hippocamp_adjusted" = "Bilateral Whole Hippocampus Volume (adjusted for covariates)",
-#  "bilat_ant_hippocamp_adjusted" = "Bilateral Anterior Hippocampus Volume (adjusted for covariates)",
-#  "bilat_post_hippocamp_adjusted" = "Bilateral Posterior Hippocampus Volume (adjusted for covariates)",
-  "erc_median_thk_bilateral_adjusted" = "Entorhinal Cortex",
-  "ba35_median_thk_biateral_adjusted" = "Brodmann Area 35",
-  "ba36_median_thk_biateral_adjusted" = "Brodmann Area 36",
-  "phc_median_thk_biateral_adjusted" = "Parahippocampal Cortex"
+titles <- c(#"bilat_full_hippocamp" = "Bilateral Whole Hippocampus Volume (adjusted for covariates)",
+#  "bilat_ant_hippocamp" = "Bilateral Anterior Hippocampus Volume (adjusted for covariates)",
+#  "bilat_post_hippocamp" = "Bilateral Posterior Hippocampus Volume (adjusted for covariates)",
+  "erc_median_thk_bilateral" = "Entorhinal Cortex",
+  "ba35_median_thk_biateral" = "Brodmann Area 35",
+  "ba36_median_thk_biateral" = "Brodmann Area 36",
+  "phc_median_thk_biateral" = "Parahippocampal Cortex"
 )
 
 abbreviations <- c(
- # "bilat_full_hippocamp_adjusted" = "Whole Hippocampus Volume (%ICV)",
- # "bilat_ant_hippocamp_adjusted" = "Anterior Hippocampus Volume (%ICV)",
- # "bilat_post_hippocamp_adjusted" = "Posterior Hippocampus Volume (%ICV)",
-  "erc_median_thk_bilateral_adjusted" = "Median Thickness (%ICV)",
-  "ba35_median_thk_biateral_adjusted" = "Median Thickness (%ICV)",
-  "ba36_median_thk_biateral_adjusted" = "Median Thickness (%ICV)",
-  "phc_median_thk_biateral_adjusted" = "Median Thickness (%ICV)"
+ # "bilat_full_hippocamp" = "Whole Hippocampus Volume (%ICV)",
+ # "bilat_ant_hippocamp" = "Anterior Hippocampus Volume (%ICV)",
+ # "bilat_post_hippocamp" = "Posterior Hippocampus Volume (%ICV)",
+  "erc_median_thk_bilateral" = "Median Thickness (%ICV)",
+  "ba35_median_thk_biateral" = "Median Thickness (%ICV)",
+  "ba36_median_thk_biateral" = "Median Thickness (%ICV)",
+  "phc_median_thk_biateral" = "Median Thickness (%ICV)"
 )
 
 # Fit the linear model for each response variable
-models <- lapply(regions, fit_lm, data = ds, weights = weights)
+models <- lapply(regions, fit_lm, data = ds[ds$ad_marker=="Autopsy",], weights = weights)
 names(models) <- regions # Set the names of the list to the region names
 
 # Calculate emmeans for each response variable
@@ -817,13 +1206,13 @@ emmeans_results
 ```{r, echo=FALSE}
 # Redefine "abbreviations"
 abbreviations <- c(
- # "bilat_full_hippocamp_adjusted" = "Whole Hippocampus Volume (%ICV)",
- # "bilat_ant_hippocamp_adjusted" = "Anterior Hippocampus Volume (%ICV)",
- # "bilat_post_hippocamp_adjusted" = "Posterior Hippocampus Volume (%ICV)",
-  "erc_median_thk_bilateral_adjusted" = "Entorhinal Cortex Median Thickness (%ICV)",
-  "ba35_median_thk_biateral_adjusted" = "Brodmann Area 35 Median Thickness (%ICV)",
-  "ba36_median_thk_biateral_adjusted" = "Brodmann Area 36 Median Thickness (%ICV)",
-  "phc_median_thk_biateral_adjusted" = "Parahippocampal Cortex Median Thickness (%ICV)"
+ # "bilat_full_hippocamp" = "Whole Hippocampus Volume (%ICV)",
+ # "bilat_ant_hippocamp" = "Anterior Hippocampus Volume (%ICV)",
+ # "bilat_post_hippocamp" = "Posterior Hippocampus Volume (%ICV)",
+  "erc_median_thk_bilateral" = "Entorhinal Cortex Median Thickness (%ICV)",
+  "ba35_median_thk_biateral" = "Brodmann Area 35 Median Thickness (%ICV)",
+  "ba36_median_thk_biateral" = "Brodmann Area 36 Median Thickness (%ICV)",
+  "phc_median_thk_biateral" = "Parahippocampal Cortex Median Thickness (%ICV)"
 )
  
 # Create a table of the same data:
@@ -1012,7 +1401,7 @@ theme_vanilla(ft_comparisons)
 ```{r echo=FALSE}
 # Define a function to fit the linear model for each response variable
 fit_lm <- function(response_var, data, weights) {
-  formula <- as.formula(paste(response_var, "~ ad_present + age_at_mri + race + sex + education"))
+  formula <- as.formula(paste(response_var, "~ ad_present + age_at_mri + sex + education"))
   lm(formula, data = data, weights = weights)
 }
 
@@ -1031,22 +1420,22 @@ sorted_colnames <- c(rbind(adjusted_right_left_colnames[right_cols],
 regions <- sorted_colnames
 
 abbreviations <- c(
-  "right_anterior_hippocampus_adjusted" = "R Anterior Hippocampus",
-  "left_anterior_hippocampus_adjusted" = "L Anterior Hippocampus",
-  "right_posterior_hippocampus_adjusted" = "R Posterior Hippocampus",
-  "left_posterior_hippocampus_adjusted" = "L Posterior Hippocampus",
-  "right_erc_adjusted" = "R ERC",
-  "left_erc_adjusted" = "L ERC",
-  "right_br_35_adjusted" = "R BA35",
-  "left_br_35_adjusted" = "L BA35",
-  "right_br_36_adjusted" = "R BA36",
-  "left_br_36_adjusted" = "L BA36",
-  "right_phc_adjusted" = "R PHC",
-  "left_phc_adjusted" = "L PHC"
+  "right_anterior_hippocampus" = "R Anterior Hippocampus",
+  "left_anterior_hippocampus" = "L Anterior Hippocampus",
+  "right_posterior_hippocampus" = "R Posterior Hippocampus",
+  "left_posterior_hippocampus" = "L Posterior Hippocampus",
+  "right_erc" = "R ERC",
+  "left_erc" = "L ERC",
+  "right_br_35" = "R BA35",
+  "left_br_35" = "L BA35",
+  "right_br_36" = "R BA36",
+  "left_br_36" = "L BA36",
+  "right_phc" = "R PHC",
+  "left_phc" = "L PHC"
 )
 
 # Example usage:
-region_name <- "right_anterior_hippocampus_adjusted"
+region_name <- "right_anterior_hippocampus"
 abbreviation <- abbreviations[region_name]
 # The value of abbreviation will be "R Anterior Hippocampus"
 
@@ -1191,14 +1580,900 @@ ft %>%
   save_as_docx(path = "reports/hippocampus_subfields.docx")
 ```
 
+```{r}
+# spot check individuals with highly asymmetric volumes to see if L-side and R-side were swapped
+
+ds %>% mutate(percent_asymmetry = (abs(left_full_hippocampus - right_full_hippocampus))/
+                (sum(left_full_hippocampus + right_full_hippocampus))) %>% 
+  select(inddid, session_date, percent_asymmetry) %>% arrange(desc(percent_asymmetry))
+
 ```
+
+```{r}
+# calculate FDR corrected p-values using Benjamini-Hochberg method
+values <- c(0.078, 0.040, 0.502, 0.089, 0.024, 0.086, 0.012)
+p.adjust(values, method = "BH")
+```
+
+
+# Analysis Unadjusted for ICV
+## ANOVA of controls and cases
+
+```{r Analysis Unadjusted for ICV include=TRUE, echo=TRUE}
+ds 
+
+ggplot(ds) +
+  aes(x = ad_present, y = bilat_full_hippocamp, color = ad_present) +
+  geom_jitter() +
+  theme(legend.position = "none")
+
+# check normality
+res_aov <- aov(bilat_full_hippocamp ~ ad_present,
+               data = ds
+)
+
+par(mfrow = c(1, 2)) # combine plots
+
+# histogram
+hist(res_aov$residuals)
+
+# Equality of variances - homogeneity
+
+# Boxplot
+boxplot(bilat_full_hippocamp ~ ad_present,
+        data = ds
+)
+
+# Dotplot
+dotplot(bilat_full_hippocamp ~ ad_present,
+        data = ds
+)
+
+group_by(ds, ad_present) %>%
+  summarise(
+    mean = mean(bilat_full_hippocamp, na.rm = TRUE),
+    sd = sd(bilat_full_hippocamp, na.rm = TRUE)
+  )
+
+
+# Are hippocampal volumes different between the three groups 
+
+# Anova (unadjusted for covariates)
+res_aov <- aov(bilat_full_hippocamp ~ ad_present,
+               data = ds
+)
+
+summary(res_aov)
+
+
+# Tukey HSD test:
+post_test <- glht(res_aov,
+                  linfct = mcp(ad_present = "Tukey")
+)
+
+summary(post_test)
+
+```
+
+# T test of LBD+AD vs LBD-AD
+
+```{r}
+# To look at cases only (i.e. compare just LBD+AD to LBD-AD):
+
+ds_cases <- ds %>% filter(ad_present != "Control")
+ggplot(ds_cases) +
+  aes(x = ad_present, y = bilat_full_hippocamp, color = ad_present) +
+  geom_jitter() +
+  theme(legend.position = "none")
+
+# check normality
+res_aov <- aov(bilat_full_hippocamp ~ ad_present,
+               data = ds_cases
+)
+
+par(mfrow = c(1, 2)) # combine plots
+
+# histogram
+hist(res_aov$residuals)
+
+# Equality of variances - homogeneity (this assumption holds as long as 
+# one sample variance is no larger than twice the size of the other)
+
+# Boxplot
+boxplot(bilat_full_hippocamp ~ ad_present,
+        data = ds_cases
+)
+
+# Dotplot
+dotplot(bilat_full_hippocamp ~ ad_present,
+        data = ds_cases
+)
+
+group_by(ds_cases, ad_present) %>%
+  summarise(
+    mean = mean(bilat_full_hippocamp, na.rm = TRUE),
+    sd = sd(bilat_full_hippocamp, na.rm = TRUE)
+  )
+
+
+# Are hippocampal volumes different between the  groups 
+
+# T test
+t_test <- t.test(bilat_full_hippocamp ~ ad_present,
+                 data = ds_cases, var.equal = TRUE
+)
+
+t_test
+
+# Anova (uncorrected for unequal variances) 
+res_aov <- aov(bilat_full_hippocamp ~ ad_present,
+               data = ds_cases
+)
+
+summary(res_aov)
+
+```
+
+# Linear Model of just Full Bilateral Hippocampus
+
+```{r include=T, echo=TRUE}
+# Comparing controls and cases 
+fit <- lm(bilat_full_hippocamp  ~
+            ad_present +
+            age_at_mri +
+           # sex +
+           # education +
+            left_icv, #+
+          #  filename_simple
+          #  diagnosis
+          data = ds, weights = weights)
+
+fit
+
+```
+
+```{r}
+#Estimate marginal means and plotting results
+#fit: results on lm
+#group: variable of interest
+#adjust: method for multiple comparison corrections
+
+#ds <- ds %>% filter(ad_present != "Control")
+
+# Get sd for each group for all subfields bilat_full_hippocamp and "erc_median_thk_bilateral",   "ba35_median_thk_biateral",   "ba36_median_thk_biateral",and  "phc_median_thk_biateral"
+ds %>% group_by(ad_present) %>% summarise(sd = sd(bilat_full_hippocamp, na.rm = TRUE))
+ds %>% group_by(ad_present) %>% summarise(sd = sd(bilat_ant_hippocamp, na.rm = TRUE))
+ds %>% group_by(ad_present) %>% summarise(sd = sd(bilat_post_hippocamp, na.rm = TRUE))
+ds %>% group_by(ad_present) %>% summarise(sd = sd(erc_median_thk_bilateral, na.rm = TRUE))
+ds %>% group_by(ad_present) %>% summarise(sd = sd(ba35_median_thk_biateral, na.rm = TRUE))
+ds %>% group_by(ad_present) %>% summarise(sd = sd(ba36_median_thk_biateral, na.rm = TRUE))
+ds %>% group_by(ad_present) %>% summarise(sd = sd(phc_median_thk_biateral, na.rm = TRUE))
+
+
+```
+
+```{r}
+# Create dataframe of simulated controls 
+#  first column is ad_present = "Control", second column is bilat_full_hippocamp with mean 3,371.0, sd 309.9
+controls <- data.frame(ad_present = "Control", bilat_full_hippocamp = rnorm(190, mean = 3371.0, sd = 309.9))
+
+
+controls %<>% mutate(bilat_ant_hippocamp = rnorm(190, mean = 1724.5, sd = 225.6),
+bilat_post_hippocamp = rnorm(190, mean = 1646.5, sd = 160.1),
+erc_median_thk_bilateral = rnorm(190, mean = 2.02, sd = 0.16),
+ba35_median_thk_biateral = rnorm(190, mean = 2.35, sd = 0.16),
+ba36_median_thk_biateral = rnorm(190, mean = 2.41, sd = 0.23), 
+phc_median_thk_biateral = rnorm(190, mean = 2.15, sd = 0.13)) %>% as_tibble()
+
+# multiple every column except ad_present by 2 
+controls %<>% mutate_at(vars(-ad_present), funs(2*.)) 
+
+# # Summarise the data frame to get the mean and sd for each column
+# controls %<>% summarise_at(vars(-ad_present), funs(mean, sd))
+# controls %<>% mutate(ad_present = "Control") 
+```
+
+
+# Plot of volume (adjusted for age, sex, and left_icv)
+
+```{r}
+# Fit the linear regression model
+fit <- lm(bilat_full_hippocamp ~ ad_present + age_at_mri + sex + left_icv, data = ds, weights = weights)
+
+emm1<-emmeans(fit, specs = pairwise ~ ad_present, 
+              adjust = "none"
+)
+
+summary(emm1)
+
+as.data.frame(emm1$emmeans)
+
+as_tibble(emm1$contrasts)
+
+effect_size <- as_tibble(eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))) %>% select(effect.size)
+
+as_tibble(emm1$contrasts) %>% cbind(effect_size) %>% select(-df, -t.ratio)
+
+```
+
+
+```{r}
+# This code is from Jeffrey Walker's digital text: https://www.middleprofessor.com/files/applied-biostatistics_bookdown/_book/plotting-models.html
+
+
+# Define the color palette
+pal_okabe_ito <- c("#b27700","#0072B2", "#009E73")
+
+plot1 <- ggplot_the_response(fit, fit_emm = emm1$emmeans, fit_pairs = emm1$contrasts, 
+                    y_label = "Hippocampal Volume (mm^3)",
+                    x_label = "") + 
+  #labs(title = "Figure 1: Bilateral Hippocampal Volume")
+  panel_border() +
+  geom_violin(aes(fill = ad_present), alpha = 0.5, trim = FALSE) +
+  scale_fill_manual(values = c("#b27700","#0072B2", "#009E73")) +
+  theme_gray() +
+  theme(text = element_text(size = 24), legend.position = "none") # Adjust the font size as needed
+ # coord_cartesian(ylim = c(0.2, 0.7)) 
+
+# ggplot_the_model(fit, fit_emm = emm1$emmeans, fit_pairs = summary(emm1$contrasts, infer = TRUE), 
+#                  y_label = "Hippocampal Volume (%ICV)")
+```
+
+
+```{r}
+# Add control group to the plot using violin plot then add the mean and sd as a point and error bar
+plot1 + geom_violin(data = controls, aes(x = ad_present, y = bilat_full_hippocamp), color = "black", fill = "#b277009e") +
+  geom_boxplot(data = controls, aes(x = ad_present, y = bilat_full_hippocamp), color = "black", width = 0.2)
+
+# Look at anterior and posterior hippo
+
+# Anterior
+fit <- lm(bilat_ant_hippocamp ~ ad_present + age_at_mri + sex + left_icv, data = ds, weights = weights)
+
+emm1<-emmeans(fit, specs = pairwise ~ ad_present, 
+              adjust = "none"
+)
+
+
+ggplot_the_response(fit, fit_emm = emm1$emmeans, fit_pairs = emm1$contrasts, 
+                    y_label = "Hippocampal Volume (mm^3)",
+                    x_label = "Anterior Hippocampus") + 
+  #labs(title = "Figure 1: Bilateral Hippocampal Volume")
+  panel_border() +
+  geom_violin(aes(fill = ad_present), alpha = 0.5, trim = FALSE) +
+  scale_fill_manual(values = c("#b27700","#0072B2", "#009E73")) +
+  theme_gray() +
+  theme(text = element_text(size = 24), legend.position = "none") +
+  geom_violin(data = controls, aes(x = ad_present, y = bilat_ant_hippocamp), color = "black", fill = "#b277009e") +
+  geom_boxplot(data = controls, aes(x = ad_present, y = bilat_ant_hippocamp), color = "black", width = 0.2)
+  
+
+
+as.data.frame(emm1$emmeans)
+
+effect_size <- as_tibble(eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))) %>% select(effect.size)
+
+as_tibble(emm1$contrasts) %>% cbind(effect_size) %>% select(-df, -t.ratio)
+
+# Posterior
+fit <- lm(bilat_post_hippocamp ~ ad_present + age_at_mri + sex + left_icv, data = ds, weights = weights)
+
+emm1<-emmeans(fit, specs = pairwise ~ ad_present, 
+              adjust = "none"
+)
+
+
+as.data.frame(emm1$emmeans)
+
+effect_size <- as_tibble(eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))) %>% select(effect.size)
+
+as_tibble(emm1$contrasts) %>% cbind(effect_size) %>% select(-df, -t.ratio)
+
+ggplot_the_response(fit, fit_emm = emm1$emmeans, fit_pairs = emm1$contrasts, 
+                    y_label = "Hippocampal Volume (mm^3)",
+                    x_label = "Posterior Hippocampus") + 
+  #labs(title = "Figure 1: Bilateral Hippocampal Volume")
+  panel_border() +
+  geom_violin(aes(fill = ad_present), alpha = 0.5, trim = FALSE) +
+  scale_fill_manual(values = c("#b27700","#0072B2", "#009E73")) +
+  theme_gray() +
+  theme(text = element_text(size = 24), legend.position = "none") +
+  geom_violin(data = controls, aes(x = ad_present, y = bilat_post_hippocamp), color = "black", fill = "#b277009e") +
+  geom_boxplot(data = controls, aes(x = ad_present, y = bilat_post_hippocamp), color = "black", width = 0.2)
+
+# ERC 
+fit <- lm(erc_median_thk_bilateral ~ ad_present + age_at_mri + sex + left_icv, data = ds, weights = weights)
+
+emm1<-emmeans(fit, specs = pairwise ~ ad_present, 
+              adjust = "none"
+)
+
+ggplot_the_response(fit, fit_emm = emm1$emmeans, fit_pairs = emm1$contrasts, 
+                    y_label = "",
+                    x_label = "Entorhinal Cortex") + 
+  #labs(title = "Figure 1: Bilateral Hippocampal Volume")
+  panel_border() +
+  geom_violin(aes(fill = ad_present), alpha = 0.5, trim = FALSE) +
+  scale_fill_manual(values = c("#b27700","#0072B2", "#009E73")) +
+  theme_gray() +
+  theme(text = element_text(size = 24), legend.position = "none") + 
+  geom_violin(data = controls, aes(x = ad_present, y = erc_median_thk_bilateral), color = "black", fill = "#b277009e") +
+  geom_boxplot(data = controls, aes(x = ad_present, y = erc_median_thk_bilateral), color = "black", width = 0.2)
+
+as.data.frame(emm1$emmeans)
+
+effect_size <- as_tibble(eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))) %>% select(effect.size)
+
+as_tibble(emm1$contrasts) %>% cbind(effect_size) %>% select(-df, -t.ratio)
+
+
+# BA35
+fit <- lm(ba35_median_thk_biateral ~ ad_present + age_at_mri + sex + left_icv, data = ds, weights = weights)
+
+emm1<-emmeans(fit, specs = pairwise ~ ad_present, 
+              adjust = "none"
+)
+
+ggplot_the_response(fit, fit_emm = emm1$emmeans, fit_pairs = emm1$contrasts, 
+                    y_label = "",
+                    x_label = "Brodmann Area 35") + 
+  #labs(title = "Figure 1: Bilateral Hippocampal Volume")
+  panel_border() +
+  geom_violin(aes(fill = ad_present), alpha = 0.5, trim = FALSE) +
+  scale_fill_manual(values = c("#b27700","#0072B2", "#009E73")) +
+  theme_gray() +
+  theme(text = element_text(size = 24), legend.position = "none") +
+  geom_violin(data = controls, aes(x = ad_present, y = ba35_median_thk_biateral), color = "black", fill = "#b277009e") +
+  geom_boxplot(data = controls, aes(x = ad_present, y = ba35_median_thk_biateral), color = "black", width = 0.2)
+
+as.data.frame(emm1$emmeans)
+
+effect_size <- as_tibble(eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))) %>% select(effect.size)
+
+as_tibble(emm1$contrasts) %>% cbind(effect_size) %>% select(-df, -t.ratio)
+
+
+# BA36
+fit <- lm(ba36_median_thk_biateral ~ ad_present + age_at_mri + sex + left_icv, data = ds, weights = weights)
+
+emm1<-emmeans(fit, specs = pairwise ~ ad_present, 
+              adjust = "none"
+)
+
+ggplot_the_response(fit, fit_emm = emm1$emmeans, fit_pairs = emm1$contrasts, 
+                    y_label = "",
+                    x_label = "Brodmann Area 36") + 
+  #labs(title = "Figure 1: Bilateral Hippocampal Volume")
+  panel_border() +
+  geom_violin(aes(fill = ad_present), alpha = 0.5, trim = FALSE) +
+  scale_fill_manual(values = c("#b27700","#0072B2", "#009E73")) +
+  theme_gray() +
+  theme(text = element_text(size = 24), legend.position = "none") +
+  geom_violin(data = controls, aes(x = ad_present, y = ba36_median_thk_biateral), color = "black", fill = "#b277009e") +
+  geom_boxplot(data = controls, aes(x = ad_present, y = ba36_median_thk_biateral), color = "black", width = 0.2)
+
+as.data.frame(emm1$emmeans)
+
+effect_size <- as_tibble(eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))) %>% select(effect.size)
+
+as_tibble(emm1$contrasts) %>% cbind(effect_size) %>% select(-df, -t.ratio)
+
+
+# PHC
+fit <- lm(phc_median_thk_biateral ~ ad_present + age_at_mri + sex + left_icv, data = ds, weights = weights)
+
+emm1<-emmeans(fit, specs = pairwise ~ ad_present, 
+              adjust = "none"
+)
+
+ggplot_the_response(fit, fit_emm = emm1$emmeans, fit_pairs = emm1$contrasts, 
+                    y_label = "",
+                    x_label = "Parahippocampal Cortex") + 
+  #labs(title = "Figure 1: Bilateral Hippocampal Volume")
+  panel_border() +
+  geom_violin(aes(fill = ad_present), alpha = 0.5, trim = FALSE) +
+  scale_fill_manual(values = c("#b27700","#0072B2","#009E73")) +
+  theme_gray() +
+  theme(text = element_text(size = 24), legend.position = "none") +
+  geom_violin(data = controls, aes(x = ad_present, y = phc_median_thk_biateral), color = "black", fill = "#b277009e") +
+  geom_boxplot(data = controls, aes(x = ad_present, y = phc_median_thk_biateral), color = "black", width = 0.2)
+
+as.data.frame(emm1$emmeans)
+
+effect_size <- as_tibble(eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))) %>% select(effect.size)
+
+as_tibble(emm1$contrasts) %>% cbind(effect_size) %>% select(-df, -t.ratio)
+
+###
+# Look at the outliers in controls:
+ds %>% filter(ad_present == "Control") %>% arrange((ba35_median_thk_right)) %>% select(inddid, flywheel_session_label, ba35_median_thk_right, manufacturers_model_name, slice_thickness, left_icv) %>% View()
+
+
+ds %>% select(ad_present, ba35_median_thk_left) %>% group_by(ad_present) %>% summarize(mean = mean (ba35_median_thk_left, na.rm = T), sd = sd(ba35_median_thk_left, na.rm=T))
+```
+
+
+```{r, echo=FALSE}
+# All subfields
+# Define a function to fit the linear model for each response variable
+fit_lm <- function(response_var, data, weights) {
+  formula <- as.formula(paste(response_var, "~ ad_present + age_at_mri + sex + trm_total"))
+  lm(formula, data = data, weights = weights)
+}
+
+regions <- c(#"bilat_full_hippocamp", 
+  #"bilat_ant_hippocamp",
+  #"bilat_post_hippocamp",
+  #"bilat_erc",
+  #"bilat_br_35",
+  #"bilat_br_36",
+  #"bilat_phc",
+  "erc_median_thk_bilateral",
+  "ba35_median_thk_biateral",
+  "ba36_median_thk_biateral",
+  "phc_median_thk_biateral"
+)
+
+titles <- c(#"bilat_full_hippocamp" = "Bilateral Whole Hippocampus Volume (adjusted for covariates)",
+  #"bilat_ant_hippocamp" = "Bilateral Anterior Hippocampus Volume (adjusted for covariates)",
+  #"bilat_post_hippocamp" = "Bilateral Posterior Hippocampus Volume (adjusted for covariates)",
+  #"bilat_erc"= "Entorhinal Cortex",
+  #"bilat_br_35"= "Brodmann Area 35",
+  #"bilat_br_36"= "Brodmann Area 36",
+  #"bilat_phc"= "Parahippocampal Cortex",
+  "erc_median_thk_bilateral" = "Entorhinal Cortex",
+  "ba35_median_thk_biateral" = "Brodmann Area 35",
+  "ba36_median_thk_biateral" = "Brodmann Area 36",
+  "phc_median_thk_biateral" = "Parahippocampal Cortex"
+)
+
+abbreviations <- c(
+  # "bilat_full_hippocamp" = "Whole Hippocampus Volume (%ICV)",
+  # "bilat_ant_hippocamp" = "Anterior Hippocampus Volume (%ICV)",
+  # "bilat_post_hippocamp" = "Posterior Hippocampus Volume (%ICV)",
+  "erc_median_thk_bilateral" = "Median Thickness (%ICV)",
+  "ba35_median_thk_biateral" = "Median Thickness (%ICV)",
+  "ba36_median_thk_biateral" = "Median Thickness (%ICV)",
+  "phc_median_thk_biateral" = "Median Thickness (%ICV)"
+)
+
+# Fit the linear model for each response variable
+models <- lapply(regions, fit_lm, data = ds, weights = weights)
+names(models) <- regions # Set the names of the list to the region names
+
+# Calculate emmeans for each response variable
+emmeans_results <- lapply(names(models), function(model_name) {
+  model <- models[[model_name]]
+  ref_levels <- levels(ds$ad_present)[!is.na(levels(ds$ad_present))]
+  ref_grid <- list(ad_present = ref_levels)
+  emm <- emmeans(model, specs = pairwise ~ ad_present, ref_grid = ref_grid,
+                 adjust = "tukey")
+  fit_emm <- emm$emmeans
+  fit_pairs <- emm$contrasts
+  y_label <- model_name  # Set y_label to the model name
+  ggplot_the_response(
+    fit = model,
+    fit_emm = fit_emm,
+    fit_pairs = fit_pairs,
+    y_label = abbreviations[model_name],
+    x_label = ""
+  ) + labs(title = titles[model_name]) + panel_border() +   geom_violin(aes(fill = ad_present), alpha = 0.5, trim = FALSE) +
+    scale_fill_manual(values = c("#b27700", "#0072B2", "#009E73"))
+})
+
+# Add light gridlines
+emmeans_results <- lapply(emmeans_results, function(p) {
+  p +  theme_gray() +
+    theme(legend.position = "none",
+          axis.title.y = element_blank(),
+          axis.title.x = element_blank()
+    )
+})
+
+
+# Arrange plots
+grid.arrange(grobs = emmeans_results, ncol = 2)
+
+
+emmeans_results
+
+
+```
+
+# Table of comparisons btwn marginal means
+```{r, echo=FALSE}
+# Redefine "abbreviations"
+abbreviations <- c(
+  # "bilat_full_hippocamp" = "Whole Hippocampus Volume (%ICV)",
+  # "bilat_ant_hippocamp" = "Anterior Hippocampus Volume (%ICV)",
+  # "bilat_post_hippocamp" = "Posterior Hippocampus Volume (%ICV)",
+  "erc_median_thk_bilateral" = "Entorhinal Cortex Median Thickness (%ICV)",
+  "ba35_median_thk_biateral" = "Brodmann Area 35 Median Thickness (%ICV)",
+  "ba36_median_thk_biateral" = "Brodmann Area 36 Median Thickness (%ICV)",
+  "phc_median_thk_biateral" = "Parahippocampal Cortex Median Thickness (%ICV)"
+)
+
+# Create a table of the same data:
+
+
+# Make table of marginal means displayed as "mean +/- SE"
+emmeans(fit, specs = ~ ad_present, adjust = "none") %>% 
+  summary() 
+
+
+
+
+# make contrast table
+contrasts <-  emm1 %>%
+  .$contrasts %>%
+  data.frame() %>%
+  mutate_if(is.numeric, function(x)round(x, 6)) %>% 
+  select(-df) #%>%
+#mutate_all(as.character)
+
+
+# make contrast table and include the effect size by using "eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))"
+contrasts <-  emm1 %>% 
+  .$contrasts %>%
+  data.frame() %>%
+  mutate_if(is.numeric, function(x)round(x, 6)) %>% 
+  select(-df) 
+
+
+eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit)) %>% data.frame() %>%
+  mutate_if(is.numeric, function(x)round(x, 6)) %>% 
+  select(effect.size) %>% cbind(contrasts, .) -> contrasts
+
+# transpose the dataframe and set the column names
+transposed_contrasts <- t(contrasts)
+colnames(transposed_contrasts) <- transposed_contrasts[1, ]
+transposed_contrasts <- transposed_contrasts[-1, ]
+
+transposed_contrasts <- as.data.frame(transposed_contrasts)
+
+```
+
+```{r, echo=FALSE}
+# Print the flextable
+# super_fp
+super_fp <- fp_text(vertical.align = "superscript", font.size = 8, font.family = 'Times')
+
+# italics_fp
+italic_fp <- fp_text(italic = TRUE, font.size = 16, font.family = 'Times')
+
+flextable(contrasts) %>%
+  flextable::align(align = 'center', part = 'all') %>%
+  flextable::align(align = 'left', j = 'contrast', part = 'all') %>%
+  set_header_labels(t.ratio = "t ratio",
+                    p.value = "p value",
+                    contrast = "Comparison",
+                    estimate = "Estimate") %>%
+  add_footer_row(., colwidths = ncol(contrasts), values = '') %>%
+  set_caption("Bilateral Hippocampal volume (adjusted for covariates)") %>% 
+  #  flextable::compose(., j = "df", part = "header", 
+  #          value = as_paragraph(as_chunk("d.f.", props = italic_fp))) %>%
+  flextable::compose(., j = "contrast", part = "footer", 
+                     value = as_paragraph('P values were adjusted using the Tukey method for comparing a family of 3 estimates')) %>%
+  flextable::font(fontname = 'Times', part = 'all') %>%
+  fontsize(size = 12, part = 'all') %>%
+  autofit() %>%
+  bold(i = ~ p.value < 0.05, j = ~ p.value) %>%
+  padding(padding.top = 5, part = 'footer')
+
+
+
+
+```
+
+# All subfields
+
+# Table of emmeans for each region 
+```{r, echo=FALSE, include=FALSE}
+result_list <- lapply(names(models), function(model_name) {
+  model <- models[[model_name]]
+  ref_levels <- levels(ds$ad_present)[!is.na(levels(ds$ad_present))]
+  ref_grid <- list(ad_present = ref_levels)
+  emm <- emmeans(model, specs = pairwise ~ ad_present, ref_grid = ref_grid,
+                 adjust = "tukey")
+  fit_emm <- emm$emmeans
+  fit_pairs <- emm$contrasts
+  region_name <- model_name
+  
+  # store the fit_emm and fit_pairs results in a list
+  list(region = region_name, fit_emm = fit_emm, fit_pairs = fit_pairs)
+})
+
+# Create a list of tables
+emm_table_list <- lapply(result_list, function(res) {
+  cbind(res$region, as.data.frame(res$fit_emm))
+})
+
+# Combine all tables into a single table
+emm_combined_table <- do.call(rbind, emm_table_list)
+
+emm_combined_table <- emm_combined_table %>% 
+  mutate(`res$region` = recode(`res$region`, !!!abbreviations)) %>% 
+  group_by(`res$region`) %>% select(-df) #%>% 
+# mutate_if(is.numeric, function(x)round(x, 3))
+
+# Change the column names use dplyr::rename()
+emm_combined_table %<>% rename("Mean" = emmean,
+                               "Lower CI"= lower.CL,
+                               "Upper CI"= upper.CL)
+
+# Pivot longer everything except the region and ad_present columns
+emm_combined_table <- emm_combined_table %>% 
+  pivot_longer(cols = -c(`res$region`, ad_present), names_to = "stat", values_to = "value")
+
+# Pivot wider so each value of ad_present is a column
+emm_combined_table <- emm_combined_table %>% 
+  pivot_wider(names_from = ad_present, values_from = value)
+
+# Change numerics to scientific notation
+emm_combined_table <- emm_combined_table %>% 
+  mutate_if(is.numeric, function(x)format(x, scientific = TRUE, digits = 2))
+
+# Print the flextable
+flextable(emm_combined_table) %>%
+  flextable::align(align = 'center', part = 'all') %>%
+  set_header_labels(`res$region` = "Subfield",
+                    stat = "Statistic") %>%
+  add_footer_row(., colwidths = ncol(emm_combined_table), values = '') %>%
+  #  flextable::compose(., j = "df", part = "header", 
+  #          value = as_paragraph(as_chunk("d.f.", props = italic_fp))) %>%
+  flextable::font(fontname = 'Times', part = 'all') %>%
+  fontsize(size = 12, part = 'all') %>%
+  autofit() %>%
+  padding(padding.top = 5, part = 'footer')  %>% 
+  merge_v(j=1) %>% 
+  theme_vanilla()
+
+```
+
+# Table of comparisons
+
+```{r, echo=FALSE}
+# Create a list of tables
+pairs_table_list <- lapply(result_list, function(res) {
+  cbind(res$region, as.data.frame(res$fit_pairs))
+})
+
+# Combine all tables into a single table
+pairs_combined_table <- do.call(rbind, pairs_table_list)
+
+# replace values with abbreviations
+pairs_combined_table <- pairs_combined_table %>% 
+  mutate(`res$region` = recode(`res$region`, !!!abbreviations)) %>% 
+  group_by(`res$region`) %>%
+  select(-df, -t.ratio, -SE) %>% 
+  mutate_if(is.numeric, function(x)round(x, 3))
+
+# Print the flextable
+ft_comparisons <- flextable(pairs_combined_table) %>%
+  flextable::align(align = 'center', part = 'all') %>%
+  flextable::align(align = 'left', j = 'contrast', part = 'all') %>%
+  set_header_labels(`res$region` = "Subfield",
+                    #                    t.ratio = "t ratio",
+                    p.value = "p value",
+                    contrast = "Comparison",
+                    estimate = "Estimate") %>%
+  add_footer_row(., colwidths = ncol(pairs_combined_table), values = '') %>%
+  #  flextable::compose(., j = "df", part = "header", 
+  #          value = as_paragraph(as_chunk("d.f.", props = italic_fp))) %>%
+  flextable::compose(., j = "contrast", part = "footer", 
+                     value = as_paragraph('P values were adjusted using the Tukey method for comparing a family of 3 estimates')) %>%
+  flextable::font(fontname = 'Times', part = 'all') %>%
+  fontsize(size = 12, part = 'all') %>%
+  autofit() %>%
+  bold(i = ~ p.value < 0.05) %>%
+  padding(padding.top = 5, part = 'footer')
+
+ft_comparisons <- merge_v(ft_comparisons, j = 1)
+theme_vanilla(ft_comparisons)
+
+```
+
+# All subfields by laterality
+
+```{r echo=FALSE}
+# Define a function to fit the linear model for each response variable
+fit_lm <- function(response_var, data, weights) {
+  formula <- as.formula(paste(response_var, "~ ad_present + age_at_mri + sex + left_icv"))
+  lm(formula, data = data, weights = weights)
+}
+
+# select regions 
+adjusted_right_left_colnames <- grep("(right|left).*adjusted", colnames(ds), value=TRUE, perl=TRUE)
+
+# Remove names that include "full_hippocampus"
+adjusted_right_left_colnames <- adjusted_right_left_colnames[!grepl("full_hippocampus|icv", adjusted_right_left_colnames)]
+
+
+left_cols <- grep("left", adjusted_right_left_colnames)
+right_cols <- grep("right", adjusted_right_left_colnames)
+sorted_colnames <- c(rbind(adjusted_right_left_colnames[right_cols], 
+                           adjusted_right_left_colnames[left_cols]))
+
+regions <- sorted_colnames
+
+abbreviations <- c(
+  "right_anterior_hippocampus" = "R Anterior Hippocampus",
+  "left_anterior_hippocampus" = "L Anterior Hippocampus",
+  "right_posterior_hippocampus" = "R Posterior Hippocampus",
+  "left_posterior_hippocampus" = "L Posterior Hippocampus",
+  "right_erc" = "R ERC",
+  "left_erc" = "L ERC",
+  "right_br_35" = "R BA35",
+  "left_br_35" = "L BA35",
+  "right_br_36" = "R BA36",
+  "left_br_36" = "L BA36",
+  "right_phc" = "R PHC",
+  "left_phc" = "L PHC"
+)
+
+# Example usage:
+region_name <- "right_anterior_hippocampus"
+abbreviation <- abbreviations[region_name]
+# The value of abbreviation will be "R Anterior Hippocampus"
+
+
+# Fit the linear model for each response variable
+models <- lapply(regions, fit_lm, data = ds, weights = weights)
+names(models) <- regions # Set the names of the list to the region names
+
+emm_combined_table %>% 
+  mutate(`res$region` = recode(`res$region`, !!!abbreviations)) %>% 
+  group_by(`res$region`) %>% 
+  DT::datatable()
+
+# Calculate emmeans for each response variable
+plots <- lapply(names(models), function(model_name) {
+  model <- models[[model_name]]
+  ref_levels <- levels(ds$ad_present)[!is.na(levels(ds$ad_present))]
+  ref_grid <- list(ad_present = ref_levels)
+  emm <- emmeans(model, specs = pairwise ~ ad_present, ref_grid = ref_grid,
+                 adjust = "tukey")
+  fit_emm <- emm$emmeans
+  fit_pairs <- emm$contrasts
+  y_label <- model_name  # Set y_label to the model name
+  ggplot_the_response(
+    fit = model,
+    fit_emm = fit_emm,
+    fit_pairs = fit_pairs,
+    y_label = abbreviations[model_name]
+  )
+})
+
+# Display plots
+gridExtra::grid.arrange(grobs = plots[1:4], ncol = 2)
+
+gridExtra::grid.arrange(grobs = plots[5:8], ncol = 2)
+
+gridExtra::grid.arrange(grobs = plots[9:12], ncol = 2)
+```
+
+# Table of comparisons
+
+```{r, echo=FALSE}
+
+# make contrast table
+contrasts <-  emm1 %>%
+  .$contrasts %>%
+  data.frame() %>%
+  mutate_if(is.numeric, function(x)round(x, 6)) %>% 
+  select(-df) #%>%
+#mutate_all(as.character)
+
+
+# make contrast table and include the effect size by using "eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit))"
+contrasts <-  emm1 %>% 
+  .$contrasts %>%
+  data.frame() %>%
+  mutate_if(is.numeric, function(x)round(x, 6)) %>% 
+  select(-df) 
+
+
+eff_size(emm1, sigma = sigma(fit), edf = df.residual(fit)) %>% data.frame() %>%
+  mutate_if(is.numeric, function(x)round(x, 6)) %>% 
+  select(effect.size) %>% cbind(contrasts, .) -> contrasts
+
+# transpose the dataframe and set the column names
+transposed_contrasts <- t(contrasts)
+colnames(transposed_contrasts) <- transposed_contrasts[1, ]
+transposed_contrasts <- transposed_contrasts[-1, ]
+
+transposed_contrasts <- as.data.frame(transposed_contrasts)
+
+
+result_list <- lapply(names(models), function(model_name) {
+  model <- models[[model_name]]
+  ref_levels <- levels(ds$ad_present)[!is.na(levels(ds$ad_present))]
+  ref_grid <- list(ad_present = ref_levels)
+  emm <- emmeans(model, specs = pairwise ~ ad_present, ref_grid = ref_grid,
+                 adjust = "tukey")
+  fit_emm <- emm$emmeans
+  fit_pairs <- emm$contrasts
+  region_name <- model_name
+  effect_size <- eff_size(emm, sigma = sigma(model), edf = df.residual(model)) %>% data.frame() %>%
+    mutate_if(is.numeric, function(x)round(x, 6)) %>% 
+    select(effect.size) %>% 
+    pull()
+  
+  # store the fit_emm and fit_pairs results in a list
+  list(region = region_name, fit_emm = fit_emm, fit_pairs = fit_pairs, effect_size = effect_size)
+})
+
+
+
+# Create a list of tables
+pairs_table_list <- lapply(result_list, function(res) {
+  cbind(res$region, as.data.frame(res$fit_pairs), res$effect_size)
+})
+
+# Combine all tables into a single table
+pairs_combined_table <- do.call(rbind, pairs_table_list)
+
+# Rename the columns
+pairs_combined_table %<>% rename(`Estimated Difference` = estimate, `p-value` = p.value, `Effect Size` = `res$effect_size`) 
+
+
+# replace values with abbreviations
+pairs_combined_table <- pairs_combined_table %>% 
+  mutate(`res$region` = recode(`res$region`, !!!abbreviations)) %>% 
+  group_by(`res$region`) %>%
+  select(-df, -t.ratio, -SE) %>% 
+  mutate_if(is.numeric, function(x)round(x, 5))
+
+# Pivot longer estimate, p.value and effect size to "stat"
+pairs_combined_table %<>% pivot_longer(cols = -c(`res$region`, contrast), 
+                                       names_to = "stat", 
+                                       values_to = "value") %>% pivot_wider(names_from = contrast, values_from = value)
+
+colnames(pairs_combined_table)
+# Print the flextable
+ft <- flextable(pairs_combined_table) %>%
+  flextable::align(align = 'center', part = 'all') %>%
+  #  flextable::align(align = 'left', j = 'contrast', part = 'all') %>%
+  set_header_labels(`res$region` = "Subfield",
+                    #                    t.ratio = "t ratio",
+                    #                    p.value = "p value",
+                    stat = "Stat") %>%
+  add_footer_row(., colwidths = ncol(pairs_combined_table), values = '') %>%
+  #  flextable::compose(., j = "df", part = "header", 
+  # #          value = as_paragraph(as_chunk("d.f.", props = italic_fp))) %>%
+  #   flextable::compose(., j = "contrast", part = "footer", 
+  #           value = as_paragraph('P values were adjusted using the Tukey method for comparing a family of 3 estimates')) %>%
+  flextable::font(fontname = 'Times', part = 'all') %>%
+  fontsize(size = 12, part = 'all') %>%
+  autofit() %>%
+  # bold(i = ~ p.value < 0.05) %>%
+  padding(padding.top = 5, part = 'footer') %>% 
+  merge_v(j = ~ `res$region`) %>% 
+  theme_box() #%>% 
+# bold(i = ~ stat == "p.value" & `Control - (LBD-AD)` < 0.05)
+
+# Export the table to word 
+ft %>% 
+  save_as_docx(path = "reports/hippocampus_subfields.docx")
+```
+
 
 ```{r}
 # spot check individuals with highly asymmetric volumes to see if L-side and R-side were swapped
 
-ds %>% mutate(percent_asymmetry = (abs(left_full_hippocampus_adjusted - right_full_hippocampus_adjusted))/
-                (sum(left_full_hippocampus_adjusted + right_full_hippocampus_adjusted))) %>% 
+ds %>% mutate(percent_asymmetry = (abs(left_full_hippocampus - right_full_hippocampus))/
+                (sum(left_full_hippocampus + right_full_hippocampus))) %>% 
   select(inddid, session_date, percent_asymmetry) %>% arrange(desc(percent_asymmetry))
+
+```
+
+```{r}
+# calculate FDR corrected p-values using Benjamini-Hochberg method
+
+```
+
+```{r}
+```
 
 ```
 
