@@ -120,40 +120,34 @@ pvlt_ashs <- df %>% left_join(ashs_clean)
 # remove columns that are not needed for correlation
 ignore <- c("test_date", "yob", "session_year", "left_icv_adjusted")
 
-# remove regions that are not adjusted for ICV
-pvlt_ashs %<>% 
-  select(inddid:flywheel_session_label,
-  contains("adjusted"),
-  -contains(c("misc", "sul", "meninges")),
-  -any_of(ignore)) %>% distinct()
+# # remove regions that are not adjusted for ICV
+# pvlt_ashs %<>% 
+#   select(inddid:flywheel_session_label,
+# #  contains("adjusted"),
+#   -contains(c("misc", "sul", "meninges")),
+#   -any_of(ignore)) %>% distinct()
 
-# correlation plot
-p <- pvlt_ashs %>%
-  corrr::correlate() %>%
-  rearrange() %>%
-  shave() %>% 
-  rplot() 
+# # correlation plot
+# p <- pvlt_ashs %>%
+#   corrr::correlate() %>%
+#   rearrange() %>%
+#   shave() %>% 
+#   rplot() 
   
-p + guides(x = guide_axis(n.dodge = 2))
+# p + guides(x = guide_axis(n.dodge = 2))
 
-pvlt_ashs %>%
-  correlate() %>%
-  rearrange() %>% 
-  focus(contains("p_")) 
+# pvlt_ashs %>%
+#   correlate() %>%
+#   rearrange() %>% 
+#   focus(contains("p_")) 
 
-pvlt_ashs %>%
-  corrr::correlate() %>%
-  shave() %>%
-  stretch() %>%
-  filter(abs(r) > 0.60) %>% 
-  arrange(desc(r))
+# pvlt_ashs %>%
+#   corrr::correlate() %>%
+#   shave() %>%
+#   stretch() %>%
+#   filter(abs(r) > 0.60) %>% 
+#   arrange(desc(r))
 
-```
-
-```{r}
-pvlt_ashs %>%
-  correlate() %>%
-  network_plot()
 ```
 
 # Correlation plots
@@ -163,15 +157,15 @@ pvlt_ashs %>%
   select(`Immediate Recall` = p_total,
          `Delayed Recall` = p_recall,
          `Recognition Discrimination` = p_recog,
-         `Hippocampal Volume` = bilat_full_hippocamp_adjusted, 
+         `Hippocampal Volume` = bilat_full_hippocamp, 
          `Case Status` = ad_present) %>% 
   pivot_longer(cols = contains(c("Recall", "Discrimination")),
                names_to = "test_component",
                            values_to = "score") %>% 
   pivot_longer(cols = "Hippocampal Volume",
                names_to = "region",
-               values_to = "vol") %>% 
-               mutate(score = ifelse(test_component == "Recognition Discrimination", score*10, score))
+               values_to = "vol") #%>% 
+               # mutate(score = ifelse(test_component == "Recognition Discrimination", score*10, score))
 
 # # Multiply recognition-discrimination by 10 so that it's on similar scale to recall
 # p_long_full_hippocampus %<>% 
@@ -182,18 +176,37 @@ p_long_full_hippocampus$test_component %<>% fct_relevel("Immediate Recall",
                                      "Recognition Discrimination")
 
 
+# Calculate the correlation coefficient and p-value of the correlation for hippocampal volume and verbal memory
+pvlt_corr <- pvlt_ashs %>% 
+  select(`Immediate Recall` = p_total,
+         `Delayed Recall` = p_recall,
+         `Recognition Discrimination` = p_recog,
+         `Hippocampal Volume` = bilat_full_hippocamp, 
+         `Case Status` = ad_present) 
 
+# Calculate the correlation coefficient and p-value of the correlation for hippocampal volume and verbal memory
+cor(pvlt_corr$`Recognition Discrimination`, pvlt_corr$`Hippocampal Volume`, use = "complete.obs")
+
+# By group (ad_present)
+pvlt_corr %>% 
+  group_by(`Case Status`) %>% 
+  summarise(cor = (cor(`Recognition Discrimination`, `Hippocampal Volume`))^2,
+            p = cor.test(`Recognition Discrimination`, `Hippocampal Volume`)$p.value)
+
+lm(`Recognition Discrimination` ~  `Hippocampal Volume` + `Case Status` + (`Hippocampal Volume` * `Case Status`),  data = pvlt_corr) %>% summary()
+
+# Plotting the correlations
 # Define the color palette
 pal_okabe_ito <- c("#0072B2", "#009E73")
 
 # Create the ggplot
-gg <- ggplot(p_long_full_hippocampus, aes(vol, score, color = `Case Status`)) +
+gg <- p_long_full_hippocampus %>% filter(test_component == "Recognition Discrimination") %>%  ggplot(aes(vol, score, color = `Case Status`)) +
   geom_point() +
   facet_grid(cols = vars(test_component)) +
   stat_smooth(aes(fill = `Case Status`, color = `Case Status`), method = "lm") +
-#  stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 12.1) +
-#  stat_cor(aes(color = `Case Status`, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top") +
-  labs(x = "Hippocampal Volume (%ICV)", y = "Philadelphia Verbal Learning Test Score", title = "Bilateral Hippocampal Volume and Verbal Memory Performance") +
+  stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 1) +
+  stat_cor(aes(color = `Case Status`, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top") +
+  labs(x = "Hippocampal Volume", y = "Philadelphia Verbal Learning Test Score", title = "Bilateral Hippocampal Volume and Verbal Memory Performance") +
   theme(legend.position = "top") # +
  # labs(caption = "Note: Recognition Discrimination scores were multiplied by 10 to be on a similar scale to recall scores.")
 
@@ -202,36 +215,36 @@ gg <- gg + scale_color_manual(values = pal_okabe_ito, breaks = c("LBD-AD", "LBD+
   scale_fill_manual(values = pal_okabe_ito, breaks = c("LBD-AD", "LBD+AD"), labels = c("LBD-AD", "LBD+AD"))
 
 # Make title and axis labels larger, also the facet labels
-gg <- gg + theme(plot.title = element_text(size = 24),
-                 axis.title.x = element_text(size = 24),
-                 axis.title.y = element_text(size = 24),
-                 strip.text = element_text(size = 16),
-                 legend.text = element_text(size = 16))
+gg <- gg + theme(plot.title = element_text(size = 22),
+                 axis.title.x = element_text(size = 20),
+                 axis.title.y = element_text(size = 20),
+                 strip.text = element_text(size = 14),
+                 legend.text = element_text(size = 14))
 print(gg)
 
 # Create similar plots for each subfield of regions below:
-regions <- c("bilat_ant_hippocamp_adjusted", "bilat_post_hippocamp_adjusted", 
-"erc_median_thk_bilateral_adjusted",
-"ba35_median_thk_biateral_adjusted",
-"ba36_median_thk_biateral_adjusted",
-"phc_median_thk_biateral_adjusted")
+regions <- c("bilat_ant_hippocamp", "bilat_post_hippocamp", 
+"erc_median_thk_bilateral",
+"ba35_median_thk_biateral",
+"ba36_median_thk_biateral",
+"phc_median_thk_biateral")
 
 abbreviations <- c(
-  "bilat_ant_hippocamp_adjusted" = "Anterior Hippocampus Volume (%ICV)",
-  "bilat_post_hippocamp_adjusted" = "Posterior Hippocampus Volume (%ICV)",
-  "erc_median_thk_bilateral_adjusted" = "ERC Median Thickness (%ICV)",
-  "ba35_median_thk_biateral_adjusted" = "Br35 Median Thickness (%ICV)",
-  "ba36_median_thk_biateral_adjusted" = "Br36 Median Thickness (%ICV)",
-  "phc_median_thk_biateral_adjusted" = "PHC Median Thickness (%ICV)"
+  "bilat_ant_hippocamp" = "Anterior Hippocampus Volume (%ICV)",
+  "bilat_post_hippocamp" = "Posterior Hippocampus Volume (%ICV)",
+  "erc_median_thk_bilateral" = "ERC Median Thickness (%ICV)",
+  "ba35_median_thk_biateral" = "Br35 Median Thickness (%ICV)",
+  "ba36_median_thk_biateral" = "Br36 Median Thickness (%ICV)",
+  "phc_median_thk_biateral" = "PHC Median Thickness (%ICV)"
 )
 
-titles <- c(#"bilat_full_hippocamp_adjusted" = "Bilateral Whole Hippocampus Volume (adjusted for covariates)",
-#  "bilat_ant_hippocamp_adjusted" = "Bilateral Anterior Hippocampus Volume (adjusted for covariates)",
-#  "bilat_post_hippocamp_adjusted" = "Bilateral Posterior Hippocampus Volume (adjusted for covariates)",
-  "erc_median_thk_bilateral_adjusted" = "Entorhinal Cortex",
-  "ba35_median_thk_biateral_adjusted" = "Brodmann Area 35",
-  "ba36_median_thk_biateral_adjusted" = "Brodmann Area 36",
-  "phc_median_thk_biateral_adjusted" = "Parahippocampus"
+titles <- c(#"bilat_full_hippocamp" = "Bilateral Whole Hippocampus Volume (adjusted for covariates)",
+  "bilat_ant_hippocamp" = "Anterior Hippocampus",
+  "bilat_post_hippocamp" = "Posterior Hippocampus",
+  "erc_median_thk_bilateral" = "Entorhinal Cortex",
+  "ba35_median_thk_biateral" = "Brodmann Area 35",
+  "ba36_median_thk_biateral" = "Brodmann Area 36",
+  "phc_median_thk_biateral" = "Parahippocampus"
 )
 # Define a function to pivot longer a data frame for each subregion for subsequent plotting
 
@@ -252,6 +265,8 @@ p_long <- function(region) {
     mutate(test_component = factor(test_component, levels = c("Immediate Recall", "Delayed Recall", "Recognition Discrimination")))
 }
 
+lm(p_recog ~ ba36_median_thk_biateral + ad_present + (ba36_median_thk_biateral * ad_present),  data = pvlt_ashs) %>% summary()
+
 
 # Create a list of data frames for each subregion
 p_long_list <- lapply(regions[1:2], p_long)
@@ -260,76 +275,157 @@ p_long_list <- bind_rows(p_long_list)
 p_long_list  %>% sample_frac()
 
 # Plot each region in p_long_list similar to pvlt_hippo_plot, facetted by region and test_component
-ant_post_hipp_plot <- ggplot(p_long_list, aes(vol, score, color = `Case Status`)) +
+ant_post_hipp_plot <- ggplot(p_long_list %>% filter(test_component == "Recognition Discrimination"), aes(vol, score, color = `Case Status`)) +
   geom_point() +
-  facet_grid(cols = vars(test_component), rows = vars(region)) +
+  facet_grid(rows = vars(region), labeller = labeller(region = titles)) +
   stat_smooth(aes(fill = `Case Status`, color = `Case Status`), method = "lm") +
-  stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 12.1) +
-  stat_cor(aes(color = `Case Status`, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top") +
-  labs(x = "Hippocampal Volume (%ICV)", y = "Philadelphia Verbal Learning Test Score", title = "Bilateral Hippocampal Volume and Verbal Memory Performance") +
+# stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 12, label.x = 3000) +
+# stat_cor(aes(color = `Case Status`, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top", label.x = 3000) +
+  labs(x = "Hippocampal Volume", y = "", title = "") +
   theme(legend.position = "top") +
-  labs(caption = "Note: Recognition Discrimination scores were multiplied by 10 to be on similar scale to recall scores.")
+  scale_color_manual(values = c("#0072B2", "#009E73")) +
+  scale_fill_manual(values = c("#0072B2", "#009E73")) + 
+  theme(plot.title = element_text(size = 22),
+                 axis.title.x = element_text(size = 20),
+                 axis.title.y = element_text(size = 20),
+                 strip.text = element_text(size = 14),
+                 legend.text = element_text(size = 14))
 
+ant_post_hipp_plot
 
 # Create a list of data frames for each cortical region
 p_long_list <- lapply(regions[3:length(regions)], p_long)
 p_long_list <- bind_rows(p_long_list)
 
 # Define the desired order of facet rows
-desired_order <- c(#"bilat_full_hippocamp_adjusted",
-#  "bilat_ant_hippocamp_adjusted",
-#  "bilat_post_hippocamp_adjusted",
-  "erc_median_thk_bilateral_adjusted",
-  "ba35_median_thk_biateral_adjusted",
-  "ba36_median_thk_biateral_adjusted",
-  "phc_median_thk_biateral_adjusted")
+desired_order <- c(#"bilat_full_hippocamp",
+#  "bilat_ant_hippocamp",
+#  "bilat_post_hippocamp",
+  "erc_median_thk_bilateral",
+  "ba35_median_thk_biateral",
+  "ba36_median_thk_biateral",
+  "phc_median_thk_biateral")
 
 # Convert the region variable to a factor with the desired order
 p_long_list$region <- factor(p_long_list$region, levels = desired_order)
 
 # Plot each region in p_long_list with facetted rows in the desired order
-cortex_thk_plot <- ggplot(p_long_list %>% filter(test_component == "Delayed Recall"), aes(vol, score, color = `Case Status`)) +
+cortex_thk_plot <- ggplot(p_long_list %>% filter(test_component == "Recognition Discrimination"), aes(vol, score, color = `Case Status`)) +
   geom_point() +
   facet_grid(cols = vars(test_component), rows = vars(region), labeller = labeller(region = titles)) +
   stat_smooth(aes(fill = `Case Status`, color = `Case Status`), method = "lm") +
- # stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 12, label.x = 2e-06) +
- # stat_cor(aes(color = `Case Status`, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top", label.x = 2e-06) +
-  labs(x = "Cortical Thickness (%ICV)", y = "", title = "Mesial Temporal Cortex and Verbal Memory Performance") +
-  theme(legend.position = "top") +
+# stat_cor(aes(color = NULL, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y = 12, label.x = 3) +
+# stat_cor(aes(color = `Case Status`, label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), label.y.npc = "top", label.x = 3) +
+#  labs(x = "Cortical Thickness (%ICV)", y = "", title = "Mesial Temporal Cortex and Verbal Memory Performance") +
+  theme(legend.position = "none") +
+  labs(x = "Cortical Thickness (mm)") +
   scale_color_manual(values = c("#0072B2", "#009E73")) +
-  scale_fill_manual(values = c("#0072B2", "#009E73")) +
-  theme(plot.title = element_text(size = 24),
-        axis.title.x = element_text(size = 24),
-        axis.title.y = element_text(size = 24),
-        strip.text = element_text(size = 16),
-        legend.text = element_text(size = 16))
+  scale_fill_manual(values = c("#0072B2", "#009E73")) + 
+  theme(plot.title = element_text(size = 22),
+                 axis.title.x = element_text(size = 20),
+                 axis.title.y = element_text(size = 20),
+                 strip.text = element_text(size = 14),
+                 legend.text = element_text(size = 12))
 
 # Display the ggplot
 print(cortex_thk_plot)
 
+
 ```
 
 # Partial correlation for age, sex, and education
+
+```{r}
+# Chris's code adapted:
+# First remove any rows with NA for thickness
+pvlt_ashs %<>% filter(!is.na(ba35_median_thk_biateral))
+
+regions <- c("bilat_full_hippocamp", 
+  "bilat_ant_hippocamp",
+  "bilat_post_hippocamp", 
+  "bilat_erc",
+  "bilat_br_35",
+  "bilat_br_36",
+  "bilat_phc",
+  "erc_median_thk_bilateral",
+  "ba35_median_thk_biateral",
+  "ba36_median_thk_biateral",
+  "phc_median_thk_biateral"
+)
+
+
+# Recognition discrimination
+full_model<-lm(p_recog ~ age_at_mri + sex + left_icv + bilat_ant_hippocamp, data = pvlt_ashs)
+summary(full_model)
+
+y_partial <- pvlt_ashs %>% filter(!is.na(bilat_ant_hippocamp)) %>%
+ lm(p_recog ~ age_at_mri + sex + left_icv, data = .)
+
+x_partial <- pvlt_ashs %>% filter(!is.na(bilat_ant_hippocamp)) %>%
+  lm(bilat_ant_hippocamp ~ age_at_mri + sex + left_icv, data = .)
+
+y_r <- resid(y_partial)
+
+x_r <- resid(x_partial)
+
+residual_x_y <- cbind(x_r, y_r) %>% as.tibble()
+
+lm(y_r ~ x_r, data = residual_x_y) %>% summary()
+
+p1_xy_partial <- ggplot(data = residual_x_y, aes(x = x_r, y = y_r)) +
+ geom_point(size = 2) + geom_smooth (method = "lm", colour = 'black', se = TRUE, level = 0.95) + 
+ xlab("Bilat Ant Hippocamp") + ylab("Recognition Discrimination")
+
+# Add the regression line equation and R2 to the plot and p value
+
+# Calculate R-squared and p-value
+lm_model <- lm(y_r ~ x_r, data = residual_x_y)
+r_squared <- summary(lm_model)$r.squared
+p_value <- summary(lm_model)$coefficients[2, 4]
+
+# Create the plot
+p1_xy_partial <- ggplot(data = residual_x_y, aes(x = x_r, y = y_r)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", colour = 'black', se = TRUE, level = 0.95) +
+  xlab("Bilat Ant Hippocamp") +
+  ylab("Recognition Discrimination") +
+  geom_text(aes(x = -400, y = 0.5,
+                label = paste("R^2 = ", round(r_squared, digits = 3),
+                              "p = ", round(p_value, digits = 3))),
+            parse = FALSE, size = 5, hjust = 0, vjust = 0, color = "black")
+
+# Display the plot
+print(p1_xy_partial)
+
+ 
+```
+
 ```{r}
 install.packages("ppcor")
 library(ppcor)
 install.packages("effects")
 library(effects)
-reg1 <- lm(pvlt_ashs$bilat_full_hippocamp_adjusted ~ pvlt_ashs$ageat_pvlt)   # run linear regression
+reg1 <- lm(pvlt_ashs$bilat_full_hippocamp ~ pvlt_ashs$ageat_pvlt)   # run linear regression
 resid1 <- resid(reg1)     # find the residuals - hippocampal vol free of age
 reg2 <- lm(pvlt_ashs$p_total ~ pvlt_ashs$ageat_pvlt)   # second regression
 resid2 <- resid(reg2)     # second set of residuals - verbal memory free of age
 cor(resid1, resid2)       # correlation of residuals - partial correlation
 
 # equivalent to 
-pcor.test(pvlt_ashs$bilat_full_hippocamp_adjusted, pvlt_ashs$p_total, pvlt_ashs$ageat_pvlt)
+pcor.test(pvlt_ashs$bilat_full_hippocamp, pvlt_ashs$p_total, pvlt_ashs$ageat_pvlt)
 
 # plot correlation adjusted for age 
-mod_1 <- lm(p_total ~ bilat_full_hippocamp_adjusted + ageat_pvlt, data = pvlt_ashs)   # run linear regression
+mod_1 <- lm(p_total ~ bilat_full_hippocamp + ageat_pvlt, data = pvlt_ashs)   # run linear regression
 summary(mod_1)
 summary(mod_1)$adj.r.squared
 
-effect(term = "bilat_full_hippocamp_adjusted", mod = mod_1) %>% as_tibble()
+eff_hippo <- effect(term = "bilat_full_hippocamp", mod = mod_1) 
+plot(eff_hippo)
+```
+
+```{r}
+
+
 ```
 
 
