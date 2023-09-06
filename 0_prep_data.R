@@ -1,0 +1,2270 @@
+## Script name: Munge
+##
+## Purpose of script: Import and wrangle data
+##
+## Date Created: 2023-01-05
+##
+## Notes:
+##
+
+## Load packages: ---------------------------
+library(tidyverse)
+library(here)
+library(gtsummary)
+library(janitor)
+library(magrittr)
+library(randomForest)
+library(naniar)
+library(MatchIt)
+library(conflicted)
+library(dlookr)
+library(logr)
+
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("recode", "dplyr")
+
+set.seed(0122023)
+
+# Define functions -------------
+
+# Read in xlsx and clean names
+# Requires the following packages: readxl, janitor, dplyr, magrittr
+read_and_clean_xlsx <- function(file) {
+  df <- readxl::read_excel(file) %>%
+    janitor::clean_names() %>%
+    mutate(inddid = as.character(inddid))
+
+  return(df)
+}
+
+# For csv files
+read_and_clean_csv <- function(file, inddid = FALSE) {
+  df <- read_csv(file) %>%
+    janitor::clean_names()
+  if(inddid == TRUE)
+    df$inddid <- as.character(as.factor(df$inddid))
+  return(df)
+}
+
+# Count participants
+# input: dataframe with inddid in columns
+# output: count (n)
+
+count_unique_participants <- function(data) {
+  n <- data %>%
+    select(inddid) %>%
+    n_distinct()
+  return(n)
+}
+
+
+# Describe initial query for clinical LBD cases and nml controls -------------
+
+original_query <-
+  read_and_clean_xlsx(file = here("data/original_INQuery_Output_2022.07.12_09.59_.xlsx"))
+
+original_query %<>% select(
+  inddid,
+  clinical_phenotype1,
+  motor_dx1,
+  motor_dx2,
+  cognitive_dx,
+  ageat_mri,
+  flywheel_session_timestamp_utc
+)
+
+# Count how many total
+n_total <- count_unique_participants(data = original_query)
+
+# Define new column for each subgroup to count
+original_query %<>%
+  mutate(
+    case_type =
+      case_when(
+        clinical_phenotype1 == "Normal" ~ "control",
+        clinical_phenotype1 != "Normal" ~ "case_adrc",
+        is.na(clinical_phenotype1) == TRUE ~ "case_udall"
+      )
+  )
+
+
+# Count how many controls:
+unique_participants <-
+  original_query %>%
+  select(inddid, case_type) %>%
+  distinct() %>%
+  group_by(case_type) %>%
+  summarise(count = n())
+
+
+n_controls <- unique_participants %>%
+  filter(case_type == "control") %>%
+  pull()
+
+
+unique_num <- function(df,
+                       filter_var = "case_type",
+                       filter_val) {
+  num <- df %>%
+    filter(df[[filter_var]] == filter_val) %>%
+    pull()
+  return(num)
+}
+
+# Count how many cases
+# (I think those enrolled through UDALL had "clinical_phenotype1" ==NA)
+
+n_controls <-
+  unique_num(unique_participants, "case_type", "control")
+n_cases_adrc <-
+  unique_num(unique_participants, "case_type", "case_adrc")
+n_cases_udall <-
+  unique_num(unique_participants, "case_type", "case_udall")
+
+cases_adrc <-
+  original_query %>%
+  filter(clinical_phenotype1 != "Normal") %>%
+  select(inddid)
+
+# UDALL cases
+n_cases_udall <-
+  original_query %>%
+  filter(is.na(clinical_phenotype1) == T) %>%
+  select(inddid) %>%
+  distinct() %>%
+  nrow()
+
+cases_udall <-
+  original_query %>%
+  filter(is.na(clinical_phenotype1) == T) %>%
+  select(inddid)
+
+# Total cases:
+n_cases_all <- sum(n_cases_adrc, n_cases_udall)
+
+# This should equal 0
+n_total - sum(n_controls, n_cases_all)
+
+# Save csv of unique inddids ----------------
+# All subjects
+output_file <- here("reports", "inddids_all.csv")
+
+inddids_all <-
+  original_query %>%
+  select(inddid) %>%
+  distinct()
+
+write_csv(inddids_all, file = output_file)
+
+# Controls
+output_file_2 <- here("reports", "inddids_controls.csv")
+
+inddids_controls <-
+  original_query %>%
+  filter(clinical_phenotype1 == "Normal") %>%
+  select(inddid, diagnosis = clinical_phenotype1) %>%
+  distinct()
+
+write_csv(inddids_controls, file = output_file_2)
+
+# Cases
+output_file_3 <- here("reports", "inddids_cases.csv")
+
+inddids_cases <-
+  original_query %>%
+  filter(clinical_phenotype1 != "Normal" |
+    is.na(clinical_phenotype1) == T) %>%
+  select(inddid) %>%
+  distinct()
+
+write_csv(inddids_cases, file = output_file_3)
+
+write_rds(original_query, file = here("objects/original_query.RDS"))
+
+# Collapse diagnoses ---------------------------
+
+original_query <-
+  read_rds(here("objects/original_query.RDS"))
+
+# Rename INQuery output
+clinical <- original_query
+
+# Assign "MotorDx" and "cognitive_dx" to clinical_phenotype_sum for
+# those without "clinical_phenotype1"
+clinical2 <-
+  clinical %>%
+  replace_na(list(motor_dx1 = "NA", cognitive_dx = "NA")) %>% # to be able to concatenate them later
+  mutate(
+    clinical_phenotype_sum =
+      ifelse(
+        is.na(clinical_phenotype1) == T,
+        str_c(motor_dx1, cognitive_dx, sep = " "),
+        clinical_phenotype1
+      )
+  ) %>%
+  mutate(
+    clinical_phenotype_sum = recode(
+      clinical_phenotype_sum,
+      `Parkinson Disease Normal` = "PD",
+      `Parkinson Disease MCI` = "PD-MCI",
+      `Parkinson Disease NA` = "PD",
+      `DLB MCI` = "DLB-MCI",
+      `DLB NA` = "DLB"
+    )
+  ) %>%
+  select(-clinical_phenotype1, motor_dx1, cognitive_dx)
+
+# Recode to condense groups
+clinical3 <- clinical2 %>%
+  select(
+    inddid,
+    clinical_phenotype_sum,
+    everything()
+  ) %>%
+  mutate(
+    clinical_phenotype_sum = recode(
+      clinical_phenotype_sum,
+      # condense dx groups
+      `Parkinson Disease` = "PD",
+      `Parkinson Disease Dementia` = "PDD",
+      `DLB-MCI` = "DLB",
+      `PD-MCI` = "PD"
+    )
+  ) %>%
+  select(inddid,
+    diagnosis = clinical_phenotype_sum
+  ) %>%
+  distinct() # keep only unique entries
+
+# Save as "id_diagnosis"
+output_file <- here("objects/id_diagnosis.RDS")
+
+saveRDS(clinical3, file = output_file)
+
+# N by diagnosis
+n_pd <- clinical3 %>%
+  filter(diagnosis == "PD") %>%
+  nrow()
+
+n_pdd <- clinical3 %>%
+  filter(diagnosis == "PDD") %>%
+  nrow()
+
+n_dlb <- clinical3 %>%
+  filter(diagnosis == "DLB") %>%
+  nrow()
+
+# Import demographics -----------
+# Demographics
+input_file <- here("data/demographics_all_(2023.02.28 15.24).xlsx")
+
+demographics <- read_and_clean_xlsx(input_file) %>%
+  mutate(education = na_if(education, 999)) %>%
+  select(
+    inddid, yob, race, sex,
+    education
+  )
+
+# Save output
+output_file <- here("objects/demographics.RDS")
+saveRDS(demographics, file = output_file)
+
+# Cases autopsy, PET and CSF ---------
+# Autopsy
+input_file <- here("data/autopsy_cases_(2023.02.28 15.59).xlsx")
+
+autopsy_cases <- read_and_clean_xlsx(input_file) %>%
+  select(
+    inddid,
+    autopsy_date,
+    np_dx1,
+    np_dx2,
+    braak03,
+    a_beta,
+    braak06,
+    cerad, 
+    np_dx3,
+    np_dx4,
+    np_dx5,
+  ) %>%
+  filter(is.na(np_dx1) == F)
+
+# Save output
+output_file <- here("objects/autopsy_cases.RDS")
+saveRDS(autopsy_cases, file = output_file)
+
+# PET
+# define function to clean pet data input
+clean_pet_cols <-
+  function(data_pet) {
+    data_pet %>%
+      mutate(pet_read = clinical_read) %>%
+      select(
+        inddid, pet_date,
+        pet_tracer, pet_read
+      ) %>%
+      filter((
+        pet_tracer %in% c("Florbetaben (amyloid)", "Florbetapir (amyloid)") &
+          is.na(pet_read) == F
+      ))
+  }
+
+input_file <- here("data/pet_cases_(2023.02.28 16.01).xlsx")
+
+pet_cases <- read_and_clean_xlsx(input_file) %>%
+  clean_pet_cols()
+
+# Save output
+output_file <- here("objects/pet_cases.RDS")
+saveRDS(pet_cases, file = output_file)
+
+# CSF
+# original import
+input_file <- here("data/csf_cases_(2023.02.28 16.00).xlsx")
+
+csf_cases <- read_and_clean_xlsx(input_file) %>%
+  mutate(
+    ttau = luminex_t_tau,
+    a_beta42 = luminex_abeta42,
+    tau_a_beta42_ratio = ttau / a_beta42,
+    ptau = luminex_p_tau
+  ) %>%
+  select(inddid, csf_date, ttau, a_beta42, tau_a_beta42_ratio, ptau) %>%
+  filter(is.na(csf_date) == FALSE) %>%
+  filter(!is.na(ttau) == T)
+
+
+# Save output
+output_file <- here("objects/csf_cases.RDS")
+saveRDS(csf_cases, file = output_file)
+
+# fujirebio_import
+# Queried INDD using list of subjects without any ad_markers (no_markers_ids.csv)
+# these data are in ADRC_Biomarker_Core_Data
+# For this assay, AD is defined by CSF Ab42/Ab40 <0.7
+input_file2 <- here("data/csf_fujirebio_(2023.03.29 11.47).xlsx")
+
+csf_fujirebio <- read_and_clean_xlsx(input_file2) %>%
+  mutate(inddid = as.character(inddid)) %>%
+  select(inddid, sample_date, abeta42abeta40ratio, platform) %>%
+  filter(is.na(abeta42abeta40ratio) == FALSE)
+
+# Save output
+output_file2 <- here("objects/csf_fujirebio.RDS")
+saveRDS(csf_fujirebio, file = output_file2)
+
+
+
+# Controls PET ---------
+# PET
+input_file <- here("data/pet_controls_(2023.02.28 16.15).xlsx")
+
+pet_controls <- read_and_clean_xlsx(input_file) %>%
+  clean_pet_cols()
+
+# Controls with amyloid PET completed:
+pet_controls %>%
+  select(inddid) %>%
+  distinct() %>%
+  nrow()
+
+n_controls_w_pet_complete <- n_distinct(pet_controls)
+
+# Save output
+output_file <- here("objects/pet_controls.RDS")
+saveRDS(pet_controls, file = output_file)
+
+# Clinical testing -----------------------
+# MMSE
+mmse <-
+  read_and_clean_xlsx(here("data/mmse_(2022.10.26 15.44).xlsx"))
+
+saveRDS(mmse, file = here("objects/clinical_testing/mmse.RDS"))
+
+# MOCA
+moca <-
+  read_and_clean_xlsx(here("data/moca_(2022.10.26 16.08).xlsx"))
+
+saveRDS(moca, file = here("objects/clinical_testing/moca.RDS"))
+
+# Verbal learning testing
+vlt <-
+  read_and_clean_xlsx(here("data/vlt_(2022.11.08 09.42).xlsx"))
+
+saveRDS(vlt, file = here("objects/clinical_testing/vlt_raw.RDS"))
+
+# Rey figure
+rey_figure <-
+  read_and_clean_xlsx("data/rey_figure_(2023.01.24 13.51).xlsx")
+
+saveRDS(rey_figure,
+  file = here("objects/clinical_testing/rey_figure.RDS")
+)
+
+# ASHS import --------------------
+# Read in data
+
+input_file <- here("data/ashs_t1_output06012023.txt")
+
+ashs_t1_output <-
+  read_delim(
+    file = input_file,
+    col_names = c(
+      "input",
+      "hemisphere",
+      "region",
+      "Label",
+      "Volume"
+    )
+  ) %>% clean_names()
+
+# Identify field containing sub_id and ses_id
+id_col <- colnames(ashs_t1_output)[1]
+
+# Split id column into sub_id and ses_id columns
+ashs_t1 <- ashs_t1_output %>%
+  mutate(
+    inddid = str_extract(input, "[0-9]+"),
+    flywheel_session_label = str_extract(input, "[0-9]+x[0-9]+"),
+    version = "0.2.0_t1"
+  ) %>%
+  select(inddid, flywheel_session_label, version, everything()) %>%
+  distinct()
+
+# Save T1
+output_file1 <- here("objects/ashs_t1.RDS")
+
+saveRDS(ashs_t1, file = output_file1)
+
+## Import Thickness Data -----------------
+
+input_file <-
+  here("data/output_thickness_062723.csv") # this has header in between each row of output
+
+ashs_thickness_header <- read_and_clean_csv(input_file)
+
+ashs_thickness_no_header <-
+  ashs_thickness_header[-seq(2, nrow(ashs_thickness_header), by = 2), ] # remove every other row starting with second row
+
+thk_111338_left <- read_and_clean_csv(here("data/thickness_add_ons/sub-111338_ses-20060830x1109_PreprocessedInput_left_thickness.csv"))
+
+thk_111338_right <- read_and_clean_csv(here("data/thickness_add_ons/sub-111338_ses-20060830x1109_PreprocessedInput_right_thickness.csv"))
+
+thk_127761_left <- read_and_clean_csv(here("data/thickness_add_ons/sub-127761_ses-20211118x0920_PreprocessedInput_left_thickness.csv"))
+
+thk_127761_right <- read_and_clean_csv(here("data/thickness_add_ons/sub-127761_ses-20211118x0920_PreprocessedInput_right_thickness.csv"))
+
+ashs_thickness_no_header <- rbind(ashs_thickness_no_header,thk_111338_left, thk_111338_right, thk_127761_left,thk_127761_right)
+
+# Extract inddid and flywheel_session_label from ID column
+ashs_thickness <- ashs_thickness_no_header %>%
+  mutate(
+    inddid = str_extract(id, "[0-9]+"),
+    flywheel_session_label = str_extract(id, "[0-9]+x[0-9]+")
+  ) %>%
+  select(inddid, flywheel_session_label, everything())
+
+ashs_thickness %<>% janitor::clean_names()
+
+# Convert numeric columns to numeric
+ashs_thickness[, 7:ncol(ashs_thickness)] <-
+  sapply(ashs_thickness[, 7:ncol(ashs_thickness)], as.numeric)
+
+ashs_thickness_median <-
+  ashs_thickness %>% select(inddid, flywheel_session_label, side, contains("median"))
+
+saveRDS(
+  ashs_thickness_median,
+  here("objects/ashs_thickness_median.RDS")
+)
+
+# Import MRI metadata ------------------------
+
+# T1 images parameters:
+
+input_file1 <- here("data/jesse_t1_params.csv")
+t1_params <- read_csv(input_file1) %>% janitor::clean_names()
+
+t1_params$inddid <- as.character(t1_params$subject_1)
+
+# Recode "TrioTim" to "Trio"
+t1_params <- t1_params %>%
+  mutate(manufacturers_model_name = str_replace(manufacturers_model_name, "TrioTim", "Trio"))
+
+# Create new column with date taking first 8 characters of session label and convert to date object
+t1_params <- t1_params %>%
+  mutate(
+    session_date = str_sub(session_2, 1, 8),
+    session_date = as.Date(session_date, "%Y%m%d"),
+    field_strength = as.factor(round(magnetic_field_strength, 1))
+  )
+
+saveRDS(t1_params, here("objects/t1_params.RDS"))
+
+# Import TMEM106B genotypes -----------
+tmem106b_genotype <- read_and_clean_csv(here("data/PennTMEM106B_2Aug2023.csv"), 
+                                        inddid = TRUE)
+
+saveRDS(tmem106b_genotype, here("objects/tmem106b_genotype.RDS"))
+
+
+# Import adjunctive fluid biomarkers ---------
+nfl_ptau <- read_and_clean_xlsx(here("data/csf_ptau_nfl_2023.08.03 15.01.xlsx"))
+
+saveRDS(nfl_ptau, here("objects/nfl_ptau.RDS"))
+
+# Import csf ptau
+
+# Import APOE --------
+apoe <- read_and_clean_xlsx(here("data/genetics_apoe_2023.08.03 15.04).xlsx"))
+
+apoe %<>% select(inddid, apoe) %>% 
+  mutate(apoe_binary = factor(apoe),
+         apoe_binary = fct_collapse(apoe, 
+                             E4_neg = c("E2/E2", "E2/E3","E3/E3"),
+                             E4_pos = c("E2/E4", "E3/E4", "E4/E4")
+                             )
+  )
+
+
+saveRDS(apoe, file = "objects/apoe.RDS")
+
+# Classify all LBD as ad_present or absent -----------
+
+# Number of cases/controls from original query
+diagnosis <- readRDS(here("objects/id_diagnosis.RDS"))
+
+diagnosis %>%
+  select(diagnosis) %>%
+  table()
+
+cases <-
+  diagnosis %>%
+  filter(diagnosis != "Normal")
+
+cases %>%
+  select(diagnosis) %>%
+  table()
+
+# Start with autopsy ------
+autopsy <- readRDS(here("objects/autopsy_cases.RDS"))
+
+# Number of cases with autopsy available:
+autopsy %>%
+  filter(is.na(np_dx1) == FALSE) %>%
+  count_unique_participants()
+
+ad_classification_autopsy <-
+  autopsy %>%
+  left_join(cases) %>%
+  distinct()
+
+# Convert braak03 to braak06
+ad_classification_autopsy %<>%
+  mutate(braak06 = if_else(
+    is.na(braak06),
+    case_when(
+      braak03 == "0" ~ "0",
+      braak03 == "1" ~ "2",
+      braak03 == "2" ~ "4",
+      braak03 == "3" ~ "6",
+    ),
+    braak06
+  ))
+
+# Add column with ABC level
+ad_classification_autopsy$abc <- NA
+
+ad_classification_autopsy %<>%
+  mutate(
+    abc = case_when(
+      a_beta == "0" & cerad == "0" ~ "Not",
+      a_beta == "1" & cerad %in% c("0", "1") ~ "Low",
+      a_beta == "1" & cerad %in% c("2", "3") &
+        braak06 %in% c("0", "1", "2") ~ "Low",
+      a_beta == "1" & cerad %in% c("2", "3") &
+        braak06 %in% c("3", "4", "5", "6") ~ "Intermediate",
+      a_beta == "2" & braak06 %in% c("0", "1", "2") ~ "Low",
+      a_beta == "2" &
+        braak06 %in% c("3", "4", "5", "6") ~ "Intermediate",
+      a_beta == "3" & cerad %in% c("0", "1") &
+        braak06 %in% c("0", "1", "2") ~ "Low",
+      a_beta == "3" & cerad %in% c("0", "1") &
+        braak06 %in% c("3", "4", "5", "6") ~ "Intermediate",
+      a_beta == "3" & cerad %in% c("2", "3") &
+        braak06 %in% c("0", "1", "2") ~ "Low",
+      a_beta == "3" & cerad %in% c("2", "3") &
+        braak06 %in% c("3", "4") ~ "Intermediate",
+      a_beta == "3" & cerad %in% c("2", "3") &
+        braak06 %in% c("5", "6") ~ "High"
+    )
+  )
+
+
+# Classify as ad_present or not
+# Autopsy:
+ad_classification_autopsy$ad_present_autopsy <- NA
+ad_classification_autopsy$ad_present_autopsy[ad_classification_autopsy$abc %in% c("Intermediate", "High")] <-
+  TRUE
+ad_classification_autopsy$ad_present_autopsy[ad_classification_autopsy$abc %in% c("Not", "Low")] <-
+  FALSE
+
+# How many subjects are classified with autopsy?
+# Have autopsy
+ad_classification_autopsy %>% filter(is.na(ad_present_autopsy) == FALSE)
+
+# Cases to exclude due to alternative neuropath dx
+non_lbd_autopsy <-
+  ad_classification_autopsy %>% filter(
+    np_dx1 != "Lewy body disease" &
+      (is.na(np_dx2) == TRUE |
+         np_dx2 != "Lewy body disease"
+       )
+    ) 
+
+n_exclude_autopsy <- non_lbd_autopsy %>% nrow()
+
+np_dx1_exclude_autopsy <-
+  non_lbd_autopsy %>%
+  select(np_dx1) %>%
+  table()
+
+# Create list of cases to remove:
+
+cases_to_remove <- non_lbd_autopsy$inddid
+
+# Remove from cases
+
+cases <- cases %>% filter(!inddid %in% cases_to_remove)
+
+# Cases classified:
+classified_autopsy <-
+  ad_classification_autopsy %>%
+  filter(is.na(np_dx1) == FALSE &
+    !(inddid %in% non_lbd_autopsy$inddid))
+
+n_classified_autopsy <-
+  classified_autopsy %>%
+  select(inddid) %>%
+  n_distinct() 
+
+# Then PET -------
+pet <- readRDS(here("objects/pet_cases.RDS"))
+
+abeta_tracers <- c("Florbetaben (amyloid)", "Florbetapir (amyloid)")
+
+ad_classification_pet <-
+  cases %>%
+  filter(!inddid %in% cases_to_remove &
+    !inddid %in% classified_autopsy$inddid) %>%
+  left_join(pet) %>%
+  distinct()
+
+# PET
+ad_classification_pet$ad_present_pet[ad_classification_pet$pet_read == "Positive"] <-
+  TRUE
+ad_classification_pet$ad_present_pet[ad_classification_pet$pet_read == "Negative"] <-
+  FALSE
+
+# Cases with amyloid PET completed:
+n_cases_with_pet <-
+  pet %>%
+  filter(pet_tracer %in% abeta_tracers) %>%
+  select(inddid) %>%
+  n_distinct()
+
+# Cases with amyloid PET completed and read:
+n_classified_pet <-
+  pet %>%
+  filter((
+    pet_tracer %in% abeta_tracers &
+      is.na(pet_read) == F
+  )) %>%
+  select(inddid) %>%
+  n_distinct() 
+
+# Then CSF -------
+csf <- readRDS(here("objects/csf_cases.RDS"))
+
+# csf_fujirebio <- readRDS(here("objects/csf_fujirebio.RDS"))
+
+ad_classification_csf <-
+  cases %>%
+  left_join(csf) %>%
+  filter(!inddid %in% cases_to_remove &
+           !inddid %in% classified_autopsy$inddid) %>% 
+  #  left_join(csf_fujirebio) %>%
+  filter(!is.na(ttau) == T) %>% # | Platform == "Fujirebio" # there were one or two CSF samples from initial cohort with missing ttau measurement
+  distinct() %>%
+  mutate(ad_present_csf = NA)
+
+# CSF (original cohort)
+ad_classification_csf$ad_present_csf[ad_classification_csf$tau_a_beta42_ratio > 0.3] <-
+  TRUE
+ad_classification_csf$ad_present_csf[ad_classification_csf$tau_a_beta42_ratio <= 0.3] <-
+  FALSE
+
+# Compare using Abeta42 alone to ttau/abeta ratio
+ad_classification_csf$ad_present_csf_abeta[ad_classification_csf$a_beta42 < 185.7] <-
+  TRUE
+ad_classification_csf$ad_present_csf_abeta[ad_classification_csf$a_beta42 >= 185.7] <-
+  FALSE
+
+# Replace ad_present_csf with csf_abeta
+
+ad_classification_csf$ad_present_csf <- ad_classification_csf$ad_present_csf_abeta
+
+ad_classification_csf$ad_present_csf_abeta <- NULL
+
+#
+# # CSF (additional cases with fujirebio)
+# ad_classification_csf$ad_present_csf[ad_classification_csf$a_beta42a_beta40Ratio < 0.07 &
+#                                        ad_classification_csf$Platform == "Fujirebio"] <- TRUE
+# ad_classification_csf$ad_present_csf[ad_classification_csf$a_beta42a_beta40Ratio >= 0.07 &
+#                                        ad_classification_csf$Platform == "Fujirebio"] <- FALSE
+
+
+# # Compare ratio of +/-AD in each CSF cohort
+# ad_classification_csf %>%
+#   group_by(inddid) %>%
+#   slice_sample(n = 1) %>%
+#   group_by(Platform) %>%
+#   summarise(mean = mean(ad_present_csf), n = n())
+#
+# # Much higher proportion of positive cases in fujirebio group - is this due to lack of PD cases in this group?
+# ad_classification_csf %>%
+#   group_by(Platform, diagnosis) %>%
+#   summarise(n = n())
+#
+# # Check percent among dx of DLB:
+# ad_classification_csf %>%
+#   filter(diagnosis=="DLB") %>%
+#   group_by(Platform) %>%
+#   summarise(mean = mean(ad_present_csf), n = n())
+
+# TO DO SEE if any other cases have fujirebio csf to look for consistency 
+
+# Cases classifiable with CSF:
+n_cases_with_csf <-
+  ad_classification_csf %>%
+  select(inddid) %>%
+  n_distinct()
+
+# Among subjects with multiple CSF measurements, were they incongruous?
+multiple_csf <-
+  ad_classification_csf %>%
+  count(inddid) %>%
+  filter(n > 1) %>%
+  select(inddid) %>%
+  distinct()
+
+n_multiple_csf <- nrow(multiple_csf)
+
+conflicting_csf <-
+  ad_classification_csf %>%
+  filter(inddid %in% multiple_csf$inddid) %>%
+  group_by(inddid) %>%
+  mutate(ad_congruous = mean(ad_present_csf)) %>%
+  filter(ad_congruous > 0 & ad_congruous < 1) %>%
+  arrange()
+
+conflicting_csf_ids <-
+  conflicting_csf %>%
+  select(inddid) %>%
+  distinct()
+
+n_conflicting_csf <- conflicting_csf_ids %>% nrow()
+
+cases_to_remove <- union(cases_to_remove, conflicting_csf$inddid)
+
+cases <-
+  cases %>% filter(!inddid %in% cases_to_remove)
+
+n_classified_csf <-
+  ad_classification_csf %>%
+  filter(!inddid %in% conflicting_csf$inddid) %>%
+  select(inddid) %>% 
+  n_distinct()
+
+# Merge the three AD markers tables: ------
+ad_classification <-
+  cases %>%
+  left_join(ad_classification_autopsy) %>%
+  left_join(ad_classification_pet) %>%
+  left_join(ad_classification_csf) %>%
+  filter(!inddid %in% cases_to_remove) %>%
+  select(1:2, contains("ad_present"))
+
+# Group by inddid and mark as ad_present if any marker is positive
+ad_classification2 <-
+  ad_classification %>%
+  group_by(inddid) %>%
+  mutate(
+    ad_present =
+      mean(c(
+        ad_present_autopsy, ad_present_pet, ad_present_csf
+      ), na.rm = T)
+  ) %>%
+  ungroup() %>%
+  filter(is.na(ad_present) == F) %>%
+  distinct()
+
+# Identify duplicates and make sure ad_present does not conflict:
+ad_classification2 %>%
+  group_by(inddid) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+# Then use slice to remove duplicate:
+ad_classification2 %<>%
+  group_by(inddid) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+# Any subjects with conflicting AD markers?
+# (Not anymore since I didn't look at the CSF of those that were already
+# classified with autopsy)
+# 
+# conflicting_autopsy_csf <-
+#   ad_classification2 %>%
+#   filter(ad_present != 1 & ad_present != 0)
+# 
+# autopsy_cases$inddid <- as.character(autopsy_cases$inddid)
+# 
+# # Look at CSF dates
+# conflicting_autopsy_csf %>%
+#   left_join(csf_cases) %>%
+#   left_join(autopsy_cases) %>%
+#   mutate(autopsy_csf_intvl = autopsy_date - csf_date) %>%
+#   select(1:3, 5:6, tau_a_beta42_ratio, autopsy_csf_intvl) %>%
+#   mutate(autopsy_csf_intvl_yrs = as.numeric(autopsy_csf_intvl) / 365)
+# 
+# # For those with conflicting autopsy and csf, use the autopsy diagnosis for ad_present
+# # First check how many ad_present
+# ad_classification2 %>%
+#   select(ad_present) %>%
+#   table()
+# 
+# # For those with conflicting ad_present (i.e. = 0.5), use autopsy diagnosis
+# ad_classification2 <-
+#   ad_classification2 %>%
+#   mutate(
+#     ad_present = case_when(
+#       ad_present == 0 ~ FALSE,
+#       ad_present == 1 ~ TRUE,
+#       ad_present == 0.5 ~ ad_present_autopsy
+#     )
+#   )
+# 
+# # Check result for those with conflicting autopsy and csf:
+# conflicting_autopsy_csf %>%
+#   select(inddid, ad_present) %>%
+#   left_join(ad_classification2, by = "inddid") %>%
+#   select(1, 3, 2, ad_present.y, everything(), -ad_present_pet)
+
+# Update list of cases to remove
+# cases_to_remove <-
+#  union(cases_to_remove, conflicting_autopsy_csf$inddid)
+
+# Who had no ad_classification markers? -------
+any_ad_marker <- ad_classification %>%
+  group_by(inddid) %>%
+  summarise(
+    has_marker =
+      !all_na(c(
+        ad_present_autopsy, ad_present_pet, ad_present_csf
+      ))
+  )
+
+any_ad_marker %>%
+  select(has_marker) %>%
+  table()
+
+no_markers <- any_ad_marker %>%
+  filter(has_marker == F) %>%
+  select(inddid) %>%
+  distinct()
+
+n_no_markers <- no_markers %>% nrow()
+
+write_csv(no_markers, file = here("reports/no_markers_ids.csv"))
+
+# Add to list of cases to remove:
+cases_to_remove <- union(cases_to_remove, no_markers$inddid)
+
+# When I looked them up in INDD, it looks like it was a combination of UDALL
+# patients with no CSF and FTD patients with CSF collected in the last 2-3 years
+
+# Phenotype of those excluded
+no_markers %>%
+  left_join(cases) %>%
+  select(diagnosis) %>%
+  table()
+
+# How many of them have unprocessed CSF?
+no_markers %>%
+  left_join(csf) %>%
+  filter(is.na(csf_date) == F) %>%
+  select(inddid) %>%
+  n_distinct()
+
+# Number of cases to remove based on ad markers (or lack thereof)
+n_cases_remove_due_to_markers <- cases_to_remove %>% n_distinct()
+
+# Final table to use for merging with ASHS data and all subsequent analysis:
+ad_classification2 %<>%
+  filter(!inddid %in% cases_to_remove)
+
+# Add column for how classified:
+ad_classification2 %<>%
+  mutate(
+    classifier = case_when(
+      !is.na(ad_present_autopsy) == T ~ "autopsy",
+      !is.na(ad_present_pet) == T &
+        is.na(ad_present_autopsy) == T ~ "pet",
+      !is.na(ad_present_csf) == T &
+        is.na(ad_present_autopsy) == T &
+        is.na(ad_present_pet) == T ~ "csf"
+    )
+  )
+
+# Breakdown by diagnosis:
+ad_classification2 %>%
+  group_by(ad_present, classifier) %>%
+  summarise(count = n())
+
+# Number of cases successfully classified as LBD+/-AD
+n_classified_lbd <- ad_classification2 %>%
+  select(inddid, diagnosis, ad_present) %>%
+  n_distinct()
+
+n_classified_lbd_plus_ad <- ad_classification2 %>%
+  select(inddid, diagnosis, ad_present) %>%
+  filter(ad_present == TRUE) %>%
+  n_distinct()
+
+n_classified_lbd_minus_ad <- ad_classification2 %>%
+  select(inddid, diagnosis, ad_present) %>%
+  filter(ad_present == FALSE) %>%
+  n_distinct()
+
+write_rds(ad_classification2,
+  file = here("objects/ad_classification_final.RDS")
+)
+
+# Calculate interval between MRI (ASHS output) and AD biomarker/autopsy ---------
+
+# First pivot ASHS output to wide
+input_file <- here("objects/ashs_t1.RDS")
+
+ashs_t1 <- readRDS(input_file)
+
+ashs_wide <- ashs_t1 %>%
+  unite(col = region, hemisphere, region) %>%
+  select(-label, -version) %>%
+  distinct() %>%
+  #  filter(!(input == "sub-100066_ses-20070926x1018_BrainSegmentation0N4" &
+  #             ASHS_import_batch == "2")) %>% # remove duplicate
+  pivot_wider(
+    id_cols = c(inddid, flywheel_session_label),
+    names_from = region,
+    values_from = volume
+  )
+
+# Save ASHS wide
+saveRDS(ashs_wide, here("objects/ashs_wide.RDS"))
+
+# Count cases with ASHS:
+n_cases_classified_with_ashs <-
+  ad_classification2$inddid %in% ashs_wide$inddid %>% sum()
+
+# Export list of those classified but without ASHS output:
+cases_lacking_ashs <- ad_classification2 %>%
+  filter(!inddid %in% ashs_wide$inddid) %>%
+  left_join(original_query) %>%
+  select(inddid, diagnosis, contains("flywheel"))
+
+write.csv(
+  cases_lacking_ashs,
+  "reports/ad_classified_lbd_no_ashs_after_qc.csv"
+)
+
+# Create MRI session date variable
+ashs_date <- ashs_wide %>%
+  select(inddid, flywheel_session_label) %>%
+  mutate(session_date = str_sub(flywheel_session_label, 0, 8),
+         session_date = as.Date(session_date, format = "%Y%m%d"))
+
+# Import finalized ad_classification:
+input_file <- here("objects/ad_classification_final.RDS")
+
+ad_classification <- read_rds(input_file)
+
+# Merge ASHS with ad_classification df
+ad_classified_ashs <-
+  ad_classification %>%
+  left_join(ashs_date) %>% 
+  filter(!is.na(flywheel_session_label)) # Remove rows with no MRI 
+
+# Add relevant columns to calculate intervals between biomarkers and MRI
+
+# First pull dates from original dataframes
+autopsy_dates <- autopsy_cases %>% select(inddid, autopsy_date)
+
+pet_dates <- pet_cases %>% select(inddid, pet_date)
+
+csf_dates <- csf_cases %>%
+  select(inddid, csf_date) %>%
+  filter(!inddid %in% classified_autopsy$inddid)
+
+# Merge dates
+ad_ashs_dates <- ad_classified_ashs %>%
+  left_join(autopsy_dates) %>%
+  left_join(pet_dates) %>%
+  left_join(csf_dates, relationship = "many-to-many")
+
+# Calculate time between MRI and biomarker
+ad_ashs_dates2 <-
+  ad_ashs_dates %>%
+  mutate(
+    intvl = case_when(
+      is.na(ad_present_autopsy) == F ~
+        as.numeric(as.Date(autopsy_date) - as.Date(session_date)) / 365,
+      is.na(ad_present_pet) == F ~
+        as.numeric(as.Date(pet_date) - as.Date(session_date)) / 365,
+      is.na(ad_present_csf) == F ~
+        as.numeric(as.Date(csf_date) - as.Date(session_date)) / 365
+    )
+  )
+
+ad_ashs_dates3 <- ad_ashs_dates2 %>% filter(is.na(intvl) == F)
+
+# Select MRIs cases ------
+
+# First identify those with only one MRI to choose
+ad_ashs_dates3 %>%
+  group_by(inddid) %>%
+  filter(n() == 1)
+
+# For those with an autopsy ---------
+autopsy_mris <- ad_ashs_dates3 %>%
+  mutate(ad_marker = "autopsy") %>%
+  group_by(inddid) %>%
+  filter(
+    intvl < 5,
+    is.na(ad_present_autopsy) == F
+  ) %>%
+  filter(intvl == max(intvl)) %>% # take earliest MRI within 5 years of autopsy
+  distinct() %>%
+  ungroup()
+
+# For flow chart:
+# Subjects with autopsy available:
+ad_ashs_dates3 %>%
+  filter(is.na(ad_present_autopsy) == F) %>%
+  select(inddid) %>%
+  distinct() %>%
+  nrow()
+
+# Subjects whose autopsy was >5 years from MRI
+autopsy_intvl_5y_or_more <-
+  ad_ashs_dates3 %>%
+  filter(is.na(ad_present_autopsy) == F) %>%
+  filter(intvl > 5) %>%
+  select(-ad_present_pet, -ad_present_csf, pet_date, -csf_date, -intvl)
+
+# See if they have PET available:
+any(autopsy_intvl_5y_or_more$inddid %in% pet$inddid)
+
+# See if they have CSF available:
+any(autopsy_intvl_5y_or_more$inddid %in% csf$inddid)
+
+# Join with csf df and recalculate ad dx on basis of csf
+autopsy_intvl_5y_or_more %<>%
+  left_join(csf) %>%
+  filter(is.na(csf_date) == FALSE) %>%
+  mutate(ad_present_csf = ifelse(
+    tau_a_beta42_ratio > 0.3,
+    TRUE,
+    ifelse(tau_a_beta42_ratio <= 0.3, FALSE,
+      NA
+    )
+  ))
+
+# Confirm no discrepancies between autopsy and csf:
+conflicting_csf_and_autopsy_5y_or_more <-
+  autopsy_intvl_5y_or_more %>%
+  filter(ad_present_autopsy != ad_present_csf) %>%
+  select(1:3, autopsy_date, a_beta42, csf_date)
+
+n_conflicting_csf_and_autopsy_5y_or_more <-
+  conflicting_csf_and_autopsy_5y_or_more %>%
+  select(inddid) %>%
+  distinct() %>%
+  nrow()
+
+# Add these to cases to remove
+n_distinct(cases_to_remove)
+
+cases_to_remove <-
+  union(
+    conflicting_csf_and_autopsy_5y_or_more$inddid,
+    cases_to_remove
+  )
+
+n_distinct(cases_to_remove)
+
+n_distinct(autopsy_intvl_5y_or_more$inddid)
+
+autopsy_csf_mris <- autopsy_intvl_5y_or_more %>%
+  mutate(intvl = as.numeric(as.Date(csf_date) - as.Date(session_date)) /
+    365) %>%
+  filter(!inddid %in% cases_to_remove) %>%
+  group_by(inddid) %>%
+  mutate(intvl = abs(intvl)) %>%
+  filter(intvl < 5) %>%
+  filter(intvl == min(intvl)) %>%
+  distinct() %>%
+  ungroup() %>%
+  mutate(ad_present_pet = NA, ad_marker = "autopsy_and_csf") %>%
+  select(
+    inddid,
+    diagnosis,
+    ad_present_autopsy,
+    ad_present_pet,
+    ad_present_csf,
+    ad_present,
+    classifier = ad_marker,
+    flywheel_session_label,
+    session_date,
+    autopsy_date,
+    pet_date,
+    csf_date,
+    intvl,
+    ad_marker = ad_marker
+  )
+
+
+# Join with rest of autopsy_mris
+autopsy_mris <- rbind(autopsy_mris, autopsy_csf_mris)
+
+n_distinct(autopsy_mris)
+
+write_csv(autopsy_mris[, 1:2], "reports/autopsy_mris.csv")
+
+# For PET ---------
+pet_mris <- ad_ashs_dates3 %>%
+  mutate(ad_marker = "pet") %>%
+  filter(
+    inddid %in% autopsy_mris$inddid == F,
+    is.na(pet_date) == F
+  ) %>%
+  group_by(inddid) %>%
+  mutate(intvl = abs(intvl)) %>%
+  filter(intvl < 5) %>%
+  filter(intvl == min(intvl)) %>%
+  mutate(csf_date = NA) %>%
+  distinct() %>%
+  ungroup()
+
+# See if any PET >5 years from MRI
+pet_5y_from_mri <- ad_ashs_dates3 %>%
+  filter(inddid %in% autopsy_mris$inddid == F &
+    is.na(pet_date) == F) %>%
+  group_by(inddid) %>%
+  mutate(intvl = abs(intvl)) %>%
+  filter(intvl > 5)
+
+# Do they have PET that is earlier than that?
+all(pet_5y_from_mri$inddid %in% pet_mris$inddid)
+
+# For CSF -----------
+csf_mris <- ad_ashs_dates3 %>%
+  mutate(ad_marker = "csf") %>%
+  filter(
+    inddid %in% autopsy_mris$inddid == F,
+    inddid %in% pet_mris$inddid == F,
+    is.na(csf_date) == F
+  ) %>%
+  group_by(inddid) %>%
+  mutate(intvl = abs(intvl)) %>%
+  filter(intvl < 5) %>%
+  filter(intvl == min(intvl)) %>%
+  distinct() %>%
+  ungroup()
+
+# !!!MAKE SURE ONLY EXCLUDING CSF SAMPLES NOT INDIVIDUALS !!!--------
+# See if any csf >5 years from MRI
+csf_5y_from_mri <- ad_ashs_dates3 %>%
+  filter(
+    inddid %in% autopsy_mris$inddid == F &
+      inddid %in% pet_mris$inddid == F,
+    is.na(csf_date) == F
+  ) %>%
+  group_by(inddid) %>%
+  mutate(intvl = abs(intvl)) %>%
+  filter(intvl > 5) %>%
+  distinct()
+
+# Do they have csf that is earlier than that?
+all(csf_5y_from_mri$inddid %in% csf_mris$inddid)
+
+excluded_csf_5y_from_mri <-
+  csf_5y_from_mri %>%
+  filter(!inddid %in% csf_mris$inddid) %>%
+  select(inddid) %>%
+  distinct()
+
+n_excluded_csf_5y_from_mri <-
+  n_distinct(excluded_csf_5y_from_mri$inddid)
+
+# Combine tables of selected mris
+mri_selected_cases <-
+  bind_rows(autopsy_mris, pet_mris, csf_mris) %>%
+  select(inddid, session_date, ad_marker, everything()) %>%
+  group_by(inddid) %>%
+  distinct() %>%
+  ungroup()
+
+# Save table of dx and ad_present
+output_2 <- here("objects/id_dx_ad_present.RDS")
+
+id_dx_ad_present <-
+  ad_ashs_dates3 %>%
+  select(1:2, ad_present) %>%
+  distinct() %>%
+  filter(!inddid %in% (cases_to_remove))
+
+# How many ids were removed of those who had a biomarker and ashs output?
+n_distinct(ad_ashs_dates3$inddid) - n_distinct(id_dx_ad_present)
+
+saveRDS(id_dx_ad_present, output_2)
+
+# MRIs to use for cases
+mri_cases <- mri_selected_cases %>%
+  select(
+    inddid,
+    diagnosis,
+    ad_present,
+    session_date,
+    ad_marker,
+    flywheel_session_label
+  ) %>%
+  filter(diagnosis != "Normal") %>%
+  distinct()
+
+rm(mri_selected_cases) # now called mri_cases
+
+# Select MRIs for controls ----------
+controls <-
+  inddids_controls %>%
+  mutate(inddid = as.character(inddid)) %>%
+  left_join(ashs_date) %>%
+  left_join(pet) %>%
+  distinct()
+
+mri_controls <-
+  controls %>%
+  mutate(ad_present = NA) %>%
+  select(
+    inddid,
+    diagnosis,
+    ad_present,
+    session_date,
+    flywheel_session_label
+  ) %>%
+  mutate(
+    ad_marker = NA,
+    .after = session_date
+  ) %>%
+  distinct()
+
+# Identify controls with +PET to remove
+controls_to_remove_positive_pet <- controls %>%
+  filter(pet_read == "Positive") %>%
+  select(inddid) %>%
+  distinct()
+
+n_controls_to_remove_positive_pet <-
+  n_distinct(controls_to_remove_positive_pet$inddid)
+
+# Identify controls with non-missing "Date of onset
+
+input <-
+  read_and_clean_xlsx("data/controls_dz_onset_(2023.01.31 13.51).xlsx"
+  )
+controls_with_onset_pos <-
+  input %>%
+  filter(if_all(
+    .cols = global_year_onset,
+    .fns = ~ !is.na(.x)
+  )) %>%
+  select(inddid, contains("global")) %>%
+  left_join(ashs_date)
+
+n_controls_with_onset_pos <- n_distinct(controls_with_onset_pos)
+
+controls_to_remove <-
+  union(
+    controls_to_remove_positive_pet$inddid,
+    controls_with_onset_pos$inddid
+  )
+
+mri_controls2 <- mri_controls %>%
+  filter(inddid %in% controls_to_remove == F) # remove any normals with +PET
+
+# Total controls removed:
+n_distinct(mri_controls2) - n_distinct(mri_controls$inddid)
+
+# Use matching to find best MRIs/controls --------
+
+# # Select most recent MRI for controls with multiple MRIs
+# # I should try to match for date of MRI of cases ideally
+# mri_controls3 <- mri_controls2 %>% group_by(inddid) %>%
+#   slice_max(session_date, n=1, with_ties = FALSE)
+#
+# #check time between session date and consent date
+# input <-readxl::read_excel("data/controls_consents_(2023.01.31 14.18).xlsx") %>%
+#   mutate(inddid = as.character(inddid))
+#
+# control_enrollment_date <-
+#   input %>% group_by(inddid) %>% slice_min(SignedDate, n=1, with_ties = FALSE) %>%
+#   select(inddid, SignedDate)
+#
+# control_time_to_mri <-
+#   mri_controls3 %>%
+#   left_join(control_enrollment_date) %>%
+#   mutate(date_diff = as.double(
+#     difftime(
+#       session_date, SignedDate
+#       )
+#     )
+#     ) %>%
+#   select(inddid, session_date, SignedDate, date_diff)
+#
+# hist(control_time_to_mri$date_diff)
+#
+
+# Compare old to new ASHS output (i.e. after switching to using "Preprocessed" as input)
+# 
+# input_file <- here("data/ashs_t1_output06012023.txt")
+# 
+# df <- read_delim(
+#   file = input_file,
+#   col_names = c(
+#     "input",
+#     "hemisphere",
+#     "region",
+#     "Label",
+#     "Volume"
+#   )
+# )
+# 
+# input_file <- here("data/ashs_t1_output050323_2.txt")
+# 
+# df_old <- read_delim(
+#   file = input_file,
+#   col_names = c(
+#     "input",
+#     "hemisphere",
+#     "region",
+#     "Label",
+#     "Volume"
+#   )
+# )
+# 
+# # For each input, compare the volumes from the two files by subtracting the volumes from the old file from the volumes from the new file
+# # If the difference is not 0, then the volumes are different
+# df_new_icv <-
+#   df %>%
+#   filter(region == "ICV") %>%
+#   select(input, volume_new = Volume)
+# 
+# # Remove text after last underscore in input column
+# df_new_icv$input <-
+#   str_remove(df_new_icv$input, "_Preprocessedinput")
+# 
+# df_old_icv <-
+#   df_old %>%
+#   filter(region == "ICV") %>%
+#   select(input, volume_old = Volume)
+# 
+# # Remove text after last underscore in input column
+# df_old_icv$input <-
+#   str_remove(df_old_icv$input, "_BrainSegmentation0N4")
+# 
+# # Calculate difference between volumes
+# new_input_icv_difference <- left_join(df_new_icv, df_old_icv) %>%
+#   mutate(volume_diff = volume_new - volume_old)
+# 
+# # For left anterior hippocampus, compare the volumes from the two files by subtracting the volumes from the old file from the volumes from the new file
+# df_new_lahip <-
+#   df %>%
+#   filter(region == "Anterior_hippocampus" &
+#     hemisphere == "left") %>%
+#   select(input, volume_new = Volume)
+# 
+# # Remove text after last underscore in input column
+# df_new_lahip$input <-
+#   str_remove(df_new_lahip$input, "_Preprocessedinput")
+# 
+# df_new_lahip <- df_new_lahip %>% select(-input)
+# 
+# df_old_lahip <-
+#   df_old %>%
+#   filter(region == "Anterior_hippocampus" &
+#     hemisphere == "left") %>%
+#   select(input, volume_old = Volume)
+# 
+# # Remove text after last underscore in input column
+# df_old_lahip$input <-
+#   str_remove(df_old_lahip$input, "_BrainSegmentation0N4")
+# 
+# df_old_lahip <- df_old_lahip %>% select(-input)
+# 
+# # Calculate difference between volumes
+# new_input_lahip_difference <-
+#   left_join(df_new_lahip, df_old_lahip) %>%
+#   mutate(volume_diff = volume_new - volume_old) %>%
+#   mutate(volume_diff_percent = (volume_new - volume_old) / volume_old *
+#     100)
+# 
+# # create new column with inddid from text after "sub-"
+# new_input_lahip_difference %<>%
+#   mutate(inddid = str_extract(input, "(?<=sub-)(.*)(?=_ses)"))
+# 
+# 
+# # create new column with inddid from text after "sub-"
+# new_input_icv_difference %<>%
+#   mutate(inddid = str_extract(input, "(?<=sub-)(.*)(?=_ses)"))
+# 
+# # Add new column for percent change in ICV
+# new_input_icv_difference %<>%
+#   mutate(volume_diff_percent = (volume_new - volume_old) / volume_old *
+#     100)
+# 
+# # Merge icv_diff with diagnosis
+# new_input_icv_difference %<>%
+#   left_join(diagnosis)
+# 
+# # Summarize icv_diff by diagnosis
+# new_input_icv_difference %>%
+#   group_by(diagnosis) %>%
+#   summarise(
+#     mean_icv_diff = mean(volume_diff, na.rm = T),
+#     n = n()
+#   )
+# 
+# 
+# # Merge lahip_diff with diagnosis
+# new_input_lahip_difference %<>%
+#   left_join(diagnosis) %>%
+#   select(inddid, diagnosis, volume_diff, volume_diff_percent)
+# 
+# new_input_lahip_difference %>% arrange(desc(volume_diff_percent))
+# 
+# # Summarize lahip_diff by diagnosis
+# new_input_lahip_difference %>%
+#   group_by(diagnosis) %>%
+#   summarise(
+#     mean_lahip_diff = mean(volume_diff, na.rm = T),
+#     n = n()
+#   )
+
+# Remove mri sessions that failed final qc: ---------
+failed_qc <- c("sub-109984_ses-20100518x1211")
+failed_qc_ids <-
+  c(109984) # this sub only had one session available in INDD
+
+# unable to find this session to QC: sub-100896/ses-20050628x1832
+
+# I reviewed the 350 segmentations (/Users/jessecohen/Documents/MTR/lbd_mtl_subfields_1/data/lbdlbdad_sessionsPassedQC_all_04262023.csv)
+# and only 1 failed (109984 as above)
+
+
+cases_to_remove <- union(cases_to_remove, failed_qc_ids)
+# Remove controls with MRI >3 years from enrollment? --------
+#
+# controls_long_time_to_mri <- control_time_to_mri %>%
+#   filter(date_diff < (3*365)) %>%
+#   select(inddid)
+
+# Merge df of selected mri dates for cases and controls
+mri_selected_all <- rbind(mri_cases, mri_controls2)
+
+# Remove problematic cases and controls identified above
+cases_and_controls_to_remove <-
+  union(cases_to_remove, controls_to_remove)
+
+n_distinct(mri_selected_all$inddid)
+
+mri_selected_all %<>% filter(!inddid %in% c(cases_and_controls_to_remove))
+
+n_distinct(mri_selected_all$inddid)
+
+mri_selected_cases_table <-
+  mri_selected_all %>%
+  filter(diagnosis != "Normal") %>%
+  mutate(
+    diagnosis = as.factor(diagnosis),
+    ad_marker = as.factor(diagnosis)
+  ) %>%
+  select(diagnosis, ad_present, session_date, ad_marker) %>%
+  summary()
+
+# Output
+output <- here("objects/mri_selected_all.RDS")
+
+saveRDS(mri_selected_all, output)
+
+# Merge Clinical/MRI metadata w/ ASHS ---------------------------
+
+# input
+ashs_wide <- readRDS(file = here("objects/ashs_wide.RDS"))
+dim(ashs_wide)
+
+mri_selected_all <-
+  readRDS(file = here("objects/mri_selected_all.RDS"))
+dim(mri_selected_all)
+
+# output
+output <- here("objects/mri_selected_ashs_all.RDS")
+
+# merge selected mris with ashs output
+mri_selected_ashs_all <-
+  mri_selected_all %>%
+  left_join(ashs_wide, by = c("inddid", "flywheel_session_label"))
+
+# add age at MRI variable
+# extract session date
+mri_selected_ashs_all$session_year <-
+  stringr::str_sub(mri_selected_ashs_all$session_date,
+    start = 1,
+    end = 4
+  )
+
+
+# Add yob and other demographics
+mri_selected_ashs_all %<>% left_join(demographics)
+
+mri_selected_ashs_all$age_at_mri <- as.numeric(
+  lubridate::parse_date_time(mri_selected_ashs_all$session_year, "Y") -
+    lubridate::parse_date_time(mri_selected_ashs_all$yob, "Y")
+) / 365
+
+mri_selected_ashs_all$age_at_mri <-
+  round(mri_selected_ashs_all$age_at_mri, digits = 0)
+
+# Remove individuals less than 50 at time of MRI
+controls_under_50 <-
+  mri_selected_ashs_all %>%
+  filter(age_at_mri < 50) %>%
+  select(1:3, age_at_mri) %>%
+  distinct()
+
+n_controls_under_50 <- n_distinct(controls_under_50$inddid)
+
+cases_and_controls_to_remove <-
+  union(cases_and_controls_to_remove, controls_under_50$inddid)
+
+n_distinct(mri_selected_ashs_all$inddid)
+
+mri_selected_ashs_all %<>% filter(!inddid %in% cases_and_controls_to_remove)
+
+n_distinct(mri_selected_ashs_all$inddid)
+
+# set ad_present = "Normal" in controls
+mri_selected_ashs_all$ad_present %<>% as.character()
+mri_selected_ashs_all$ad_present[mri_selected_ashs_all$diagnosis ==
+  "Normal"] <- "Normal"
+mri_selected_ashs_all$ad_present <- factor(
+  mri_selected_ashs_all$ad_present,
+  levels = c("Normal", "FALSE", "TRUE"),
+  labels = c("Control", "LBD-AD", "LBD+AD")
+)
+
+saveRDS(mri_selected_ashs_all, output)
+
+rm(mri_selected_ashs_all)
+
+# Clean up variable names and classes ----------
+# input
+mri_selected_ashs <-
+  read_rds(here("objects/mri_selected_ashs_all.RDS"))
+
+# Initialise the dataset as per the template.
+dsname <- "mri_selected_ashs"
+ds <- get(dsname)
+
+# Normalize variable names automatically
+# Capture the original variable names for use in plots.
+
+vnames <- names(ds)
+
+# Normalise the variable names.
+
+ds %<>% clean_names(numerals = "right")
+
+# Confirm the results are as expected.
+names(ds)
+
+# Index the original variable names by the new names.
+
+names(vnames) <- names(ds)
+
+vnames
+
+# Note the available variables.
+
+vars <- names(ds)
+
+# Identify the character variables by index.
+
+ds %>%
+  sapply(is.character) %>%
+  which() %T>%
+  print() ->
+chari
+
+# Identify the character variables by name.
+ds %>%
+  names() %>%
+  "["(chari) ->
+charc
+
+# Observe the unique levels.
+
+ds[charc] %>% sapply(unique)
+
+# Collapse race
+naniar::any_na(ds$race)
+ds$race <- fct_collapse(
+  ds$race,
+  White = "White",
+  `Non-White or Unknown` = c(
+    "More than One race",
+    "Black or African American",
+    "Asian",
+    "Unknown or Not Reported"
+  )
+)
+naniar::any_na(ds$race)
+
+fct_lump_n(ds$race, n = 2, other_level = "Other")
+
+# How many diagnoses are represented in the dataset.
+
+ds$diagnosis %>%
+  unique() %>%
+  length()
+
+# Here is a list of diagnoses and their frequencies in the dataset
+# (for controls there are multiple MRIs for many individuals - these will be matched subsequently )
+
+ds$diagnosis %>%
+  table()
+
+# Convert character to numeric where needed
+# Identify the variables to process.
+
+cvars <- c("session_year")
+
+# Check the current class of the variables.
+
+ds[cvars] %>% sapply(class)
+
+
+# Convert to numeric.
+
+ds[cvars] %<>% sapply(as.numeric)
+
+# Review some random values.
+
+sample(ds$session_year, 10)
+
+# Convert character to factor where needed
+# Review the distribution of observations across levels.
+
+ds %>%
+  select(diagnosis, sex, race, ad_present) %>%
+  sapply(table)
+
+
+# Note the names of the desired variables.
+ds %>%
+  select(diagnosis, sex, race, ad_present) %>%
+  names() %T>%
+  print() ->
+vnames
+
+# Convert these variables from character to factor.
+ds[vnames] %<>%
+  lapply(factor, ordered = FALSE) %>%
+  data.frame() %>%
+  as_tibble()
+
+# Confirm they are now factors.
+
+ds[vnames] %>% sapply(class)
+
+# Verify the distribution has not changed.
+
+ds %>%
+  select(all_of(vnames)) %>%
+  sapply(table)
+
+# Numeric Variables
+ds %>%
+  sapply(is.numeric) %>%
+  which() %>%
+  names() %T>%
+  print() ->
+numi
+
+ds[numi] %>%
+  summary()
+
+# Note the identifiers.
+
+id <- c("inddid", "session_date", "flywheel_session_label")
+
+# Initialise ignored variables: identifiers.
+
+ignore <- c(id)
+
+# Heuristic for candidate indentifiers to possibly ignore.
+
+ds[vars] %>%
+  sapply(function(x) {
+    x %>%
+      unique() %>%
+      length()
+  }) %>%
+  equals(nrow(ds)) %>%
+  which() %>%
+  names() %T>%
+  print() ->
+ids
+
+# Once we have identified all of the variables to ignore we remove them from our list of variables to use.
+# Check the number of variables currently.
+
+length(vars)
+
+# Remove the variables to ignore.
+
+vars <- setdiff(vars, ignore)
+
+# Confirm they are now ignored.
+
+length(vars)
+
+# Identify variables that have a single value.
+
+ds %>%
+  select(all_of(vars)) %>%
+  sapply(function(x) {
+    all(x == x[1L])
+  }) %>%
+  which() %>%
+  names() %T>%
+  print() ->
+constants
+
+# Missing values ----------
+# Count the number of missing values.
+ds %>%
+  is.na() %>%
+  sum()
+
+colSums(is.na(ds))
+
+which(colSums(is.na(ds)) > 0)
+
+names(which(colSums(is.na(ds)) > 0))
+
+# Remove rows missing ASHS output
+rows_no_ashs <-
+  ds %>% filter(is.na(left_anterior_hippocampus) == T)
+
+controls_no_ashs <-
+  rows_no_ashs %>%
+  filter(diagnosis == "Normal") %>%
+  select(inddid) %>%
+  left_join(ds)
+
+n_controls_no_ashs <- n_distinct(controls_no_ashs)
+
+cases_and_controls_to_remove <-
+  union(cases_and_controls_to_remove, controls_no_ashs)
+
+# Remove rows missing ashs output (need to figure out how they snuck in in the first place)
+ds %<>% filter(is.na(left_anterior_hippocampus) == F)
+
+# No missing values in the first two columns (inddid and diagnosis)
+ds[1:2] %>%
+  is.na() %>%
+  sum()
+
+# Convert education from 0 to NA for one subject
+ds$education[ds$education == 0] <- NA
+
+# Impute education for subjects with NA
+ds$education <- ds$education %>% na.roughfix()
+
+# Convert ad_marker from NA to "NA"
+ds[ds$diagnosis == "Normal", ] %>%
+  select(ad_marker) %>%
+  table()
+
+ds$ad_marker[ds$diagnosis == "Normal"] <- "NA"
+
+# Recount the number of missing values.
+ds %>%
+  is.na() %>%
+  sum()
+
+which(colSums(is.na(ds)) > 0)
+
+names(which(colSums(is.na(ds)) > 0)) # these are okay to be NA since these regions are not identified in all MRIs
+
+# Rearrange variables so age is in front of df
+ds %<>% select(inddid, ad_present, age_at_mri, everything())
+
+ds$age_group <-
+  cut(ds$age_at_mri,
+    breaks = seq(20, 100, 10),
+    right = FALSE
+  )
+
+# Save cleaned dataframe for future use
+saveRDS(ds, "objects/ashs_raw_cleaned.RDS")
+
+# Matching 
+# ## Planning
+# ### Select type of effect to be estimated
+# # Direct effect of "case status" (LBD+/-AD) on MTL volumes
+# 
+# ### Selecting a target population
+# # In individuals with LBD
+# 
+# ### Selecting covariates to balance
+# # "To estimate total causal effects, all covariates must be measured prior to treatment (or otherwise not be affected by the treatment)"
+# 
+# # 1. Age at MRI
+# # 2. race
+# # 3. sex
+# # 4. Intracranial volume
+# # 5. year of mri
+# # 6. years of education
+# 
+# ## Check initial imbalance
+# ## No matching; constructing a pre-match matchit object
+# # Values of standardized mean differences and eCDF statistics close to zero and values of variance ratios close to one indicate good balance.
+# 
+# # remove missing covariates for MatchIt
+# ds <- read_rds("objects/ashs_raw_cleaned.RDS")
+# d_for_matchit <- ds %>%
+#   #  filter(is.na(education)==F) %>%
+#   mutate(case_status = ifelse(diagnosis == "Normal", 0, 1)) %>%
+#   select(
+#     inddid,
+#     diagnosis,
+#     ad_present,
+#     case_status,
+#     age_at_mri,
+#     flywheel_session_label,
+#     race,
+#     sex,
+#     left_icv,
+#     session_year,
+#     education,
+#     age_group
+#   )
+# 
+# # t1_params <- read_rds(here("objects/t1_params.RDS"))
+# 
+# # # Extract string after "x[d][d][d][d]_" in bids_filename
+# # t1_params$filename <- str_extract(string = t1_params$bids_filename, pattern = regex("(?<=x\\d\\d\\d\\d_)(.*)(?=.nii.gz)"))
+# 
+# # # Create simplified filename by removing _run-\d\_ from filename
+# # t1_params$filename_simple <- str_remove(string = t1_params$filename, pattern = regex("run-\\d\\_"))
+# 
+# # # Count number of rows for each filename_simple
+# # t1_params %>%
+# #   group_by(filename_simple) %>%
+# #   summarize(n = n()) %>%
+# #   arrange(desc(n))
+# #
+# # # Collapse as "other" any filename with less than 10 rows using forcats::fct_lump
+# # t1_params$filename_simple <- forcats::fct_lump_min(t1_params$filename_simple, min = 20)
+# 
+# saveRDS(t1_params, here("objects/t1_params.RDS"))
+# t1_params$subject_1 <- as.character(t1_params$subject_1)
+# d_for_matchit %<>% left_join(t1_params,
+#   by = c("inddid" = "subject_1", "flywheel_session_label" = "session_2")
+# )
+# 
+# m.out0 <- matchit(
+#   case_status ~
+#     age_group +
+#     sex +
+#     # education
+#     # manufacturers_model_name
+#     slice_thickness,
+#   data = d_for_matchit,
+#   method = NULL,
+#   distance = "glm"
+# )
+# 
+# # Checking balance prior to matching
+# summary(m.out0)
+# plot(summary(m.out0))
+# 
+# ## 1:1 NN PS matching w/o replacement
+# m.out1 <- matchit(
+#   case_status ~
+#     age_group +
+#     # age_at_mri +
+#     sex +
+#     left_icv #+
+#   # education
+#   # manufacturers_model_name
+#   # slice_thickness
+#   ,
+#   data = d_for_matchit,
+#   method = "nearest",
+#   replace = FALSE,
+#   reuse.max = 2,
+#   distance = "glm",
+#   ratio = 1,
+#   unit.id = "inddid"
+# )
+# 
+# 
+# # Checking balance after NN matching
+# plot(summary(m.out1))
+# 
+# # Since the performance was not very good with NN matching, I tried full matching on a probit PS
+# library(optmatch)
+# library(cobalt)
+# # Full matching on a probit PS
+# m.out2 <- matchit(
+#   case_status ~
+#     # age_at_mri +
+#     age_group +
+#     sex +
+#     #+
+#     # education
+#     # filename_simple
+#     # manufacturers_model_name
+#     slice_thickness,
+#   data = d_for_matchit,
+#   method = "full",
+#   distance = "glm",
+#   link = "probit",
+#   unit.id = "inddid"
+# )
+# m.out2
+# 
+# ## Checking balance after full matching
+# summary(m.out2, un = FALSE)
+# plot(summary(m.out2))
+# 
+# 
+# # Vs partial matching
+# plot(summary(m.out1))
+
+# No difference so will use the simpler NN matching with replacement
+
+# plot(m.out2, type = "qq", interactive = FALSE,
+#      which.xs = c("age_at_mri", "sex", "session_year"))
+#
+# #eCDF plot
+# plot(m.out2, type = "ecdf", interactive = FALSE,
+#      which.xs = c("age_at_mri", "sex", "session_year"))
+#
+# #density plot
+# plot(m.out2, type = "density", interactive = FALSE,
+#      which.xs = c("age_at_mri", "sex", "session_year"))
+
+# Matched df using propensity score matching
+# mF <- m.out2
+# md <- match.data(mF)
+
+# # Matched df using 1:1 nearest neighbor with replacement
+# mF <- m.out1
+# md <- match.data(mF)
+
+# # select highest weighted mri for each control
+# md_one_mri_per_control <-
+#   md %>%
+#   group_by(inddid) %>%
+#   slice_max(weights, with_ties = F) %>%
+#   select(-distance, -weights, -subclass) %>%
+#   ungroup()
+
+# # Rerun weighted matching:
+# # Full matching on a probit PS
+# m.out3 <- matchit(case_status ~
+#                     age_at_mri +
+#                     race +
+#                     sex +
+#                #     left_icv + # I think when left_icv is included here we lose to much variance in hippocampal volume/adjusted
+#                     session_year +
+#                     education,
+#                   data = md_one_mri_per_control,
+#                   method = "full",
+#                   distance = "glm",
+#                   link = "probit",
+#                   unit.id ="inddid")
+#
+# plot(summary(m.out3))
+# # Still performs very well
+
+# # NN matching works well so will use that:
+# mris_matched_cases_and_controls <- match.data(m.out1)
+# 
+# 
+# saveRDS(mris_matched_cases_and_controls, file = "objects/mris_matched_cases_and_controls.RDS")
+# 
+# # Save a copy of IDs and session labels for QC (sent to Chris Olm)
+# mri_sessions_for_qc <-
+#   mris_matched_cases_and_controls %>% select(inddid, flywheel_session_label)
+# 
+# write.csv(mri_sessions_for_qc, "reports/mri_sessions_for_qc.csv")
+# 
+# # Use the same to match LBD+AD with LBD-AD
+# d_lbd_for_matchit <-
+#   d_for_matchit %>% filter(ad_present != "Control")
+# 
+# # Before matching:
+# m.out0 <- matchit(
+#   ad_present ~
+#     age_at_mri +
+#     sex +
+#     education,
+#   data = d_lbd_for_matchit,
+#   method = NULL,
+#   distance = "glm"
+# )
+# 
+# # Checking balance prior to matching
+# summary(m.out0)
+# plot(summary(m.out0))
+# 
+# 
+# # NN matching with replacement
+# m_lbd <- matchit(
+#   ad_present ~
+#     age_at_mri +
+#     sex +
+#     education,
+#   data = d_lbd_for_matchit,
+#   method = "nearest",
+#   replace = TRUE,
+#   distance = "glm",
+#   ratio = 1,
+#   unit.id = "inddid"
+# )
+# 
+# # # Full matching on a probit PS - for consistency I used the same matching strategy to compare LBD+AD to LBD-AD
+# # m_lbd <- matchit(ad_present ~
+# #                     age_at_mri +
+# #                     sex +
+# #                     education,
+# #                   data = d_lbd_for_matchit,
+# #                  method = "full", distance = "glm",
+# #                  link = "probit")
+# 
+# ## Checking balance after full matching
+# plot(summary(m_lbd))
+# 
+# # Full matching performed much better than NN so will use that:
+# mris_matched_lbd_w_ad_vs_no_ad <- match.data(m_lbd)
+# 
+# saveRDS(mris_matched_lbd_w_ad_vs_no_ad, file = "objects/mris_matched_lbd_w_ad_vs_no_ad.RDS")
+
+
+# Combine Anterior and posterior hippocampus to make new variable ---------
+ds <- read_rds("objects/ashs_raw_cleaned.RDS")
+
+demographic_colnames <- c(
+  "inddid",
+  "diagnosis",
+  "ad_present",
+  "ad_marker",
+  "age_at_mri",
+  "race",
+  "sex",
+  "education",
+  "session_year",
+  "yob",
+  "session_date",
+  "flywheel_session_label"
+)
+
+ds_summed_regions <- ds %>%
+  mutate(
+    left_full_hippocampus =
+      left_anterior_hippocampus + left_posterior_hippocampus,
+    right_full_hippocampus =
+      right_anterior_hippocampus + right_posterior_hippocampus,
+    bilat_full_hippocamp = (left_full_hippocampus + right_full_hippocampus) /
+      2,
+    bilat_ant_hippocamp =
+      (left_anterior_hippocampus + right_anterior_hippocampus) / 2,
+    bilat_post_hippocamp =
+      (left_posterior_hippocampus + right_posterior_hippocampus) /
+        2,
+    bilat_erc = (left_erc + right_erc / 2),
+    bilat_br_35 = (left_br_35 + right_br_35) / 2,
+    bilat_br_36 = (left_br_36 + right_br_36) / 2,
+    bilat_phc = (left_phc + right_phc) / 2
+  ) %>%
+  select(
+    all_of(demographic_colnames),
+    left_anterior_hippocampus,
+    left_posterior_hippocampus,
+    left_full_hippocampus,
+    left_erc,
+    left_br_35,
+    left_br_36,
+    left_phc,
+    right_anterior_hippocampus,
+    right_posterior_hippocampus,
+    right_full_hippocampus,
+    right_erc,
+    right_br_35,
+    right_br_36,
+    right_phc,
+    bilat_full_hippocamp,
+    bilat_ant_hippocamp,
+    bilat_post_hippocamp,
+    bilat_erc,
+    bilat_br_35,
+    bilat_br_36,
+    bilat_phc,
+    left_icv,
+    everything()
+  )
+
+# Merge with thickness data
+
+thickness <- read_rds(here("objects/ashs_thickness_median.RDS"))
+
+# extract date from flywheelsession_label (first 8 characters of the string)
+thickness$session_date <-
+  str_extract(
+    string = thickness$flywheel_session_label,
+    pattern = regex("^[0-9]{8}")
+  )
+
+# Convert to date format
+thickness$session_date <-
+  as.Date(thickness$session_date, format = "%Y%m%d")
+
+# Pivot thickness data longer first collapsing regions into one column
+thickness <- thickness %>%
+  pivot_longer(
+    cols = -c(inddid, flywheel_session_label, session_date, side),
+    names_to = "region",
+    values_to = "thickness"
+  )
+
+# Combine region and side columns into one column
+thickness$region <- str_c(thickness$region, "_", thickness$side)
+
+# Remove side column
+thickness <- thickness %>% select(-side, -flywheel_session_label)
+
+# Then pivot wider (regions into columns)
+thickness <- thickness %>%
+  pivot_wider(names_from = region, values_from = thickness)
+
+# Merge with ds by inddid and session_date
+ds_summed_regions %<>% left_join(thickness, by = c("inddid", "session_date"))
+
+# Create new columns for thk_adjusted by dividing by left_icv
+ds_summed_regions %<>% mutate(across(contains("thk"), ~ .x / left_icv, .names = "{.col}_adjusted"))
+# Create vector of column names from ds that contain "thk"
+thk_cols <- ds %>%
+  select(contains("thk")) %>%
+  names()
+
+# Mutate new columns by adding together corresponding left and right columns
+ds_summed_regions %<>% mutate(
+  hippo_median_thk_bilateral = (hippo_median_thk_left + hippo_median_thk_right) /
+    2,
+  erc_median_thk_bilateral = (erc_median_thk_left + erc_median_thk_right) /
+    2,
+  ba35_median_thk_biateral = (ba35_median_thk_left + ba35_median_thk_right) /
+    2,
+  ba36_median_thk_biateral = (ba36_median_thk_left + ba36_median_thk_right) /
+    2,
+  phc_median_thk_biateral = (phc_median_thk_left + phc_median_thk_right) /
+    2,
+  hippo_median_thk_bilateral_adjusted = (
+    hippo_median_thk_left_adjusted + hippo_median_thk_right_adjusted
+  ) / 2,
+  erc_median_thk_bilateral_adjusted = (erc_median_thk_left_adjusted + erc_median_thk_right_adjusted) /
+    2,
+  ba35_median_thk_biateral_adjusted = (
+    ba35_median_thk_left_adjusted + ba35_median_thk_right_adjusted
+  ) / 2,
+  ba36_median_thk_biateral_adjusted = (
+    ba36_median_thk_left_adjusted + ba36_median_thk_right_adjusted
+  ) / 2,
+  phc_median_thk_biateral_adjusted = (phc_median_thk_left_adjusted + phc_median_thk_right_adjusted) /
+    2
+)
+
+saveRDS(ds_summed_regions, file = "objects/ashs_summed_regions.RDS")
+
+# Export inddids and session_ids ------------
+mri_selected_ashs <- read_rds("objects/mri_selected_ashs_all.RDS")
+qc_ids <- mri_selected_ashs %>% select(
+  subject = inddid,
+  session = flywheel_session_label
+)
+
+write_delim(qc_ids, file = here("qc_ids.txt"))
+
+# See how many cases with ASHS output have PVLT -------------
+verbal_testing_data <-
+  read_rds(here("objects/clinical_testing/vlt_raw.RDS"))
+
+# Initialise the dataset as per the template.
+dsname <- "verbal_testing_data"
+ds <- get(dsname)
+
+# Normalize variable names automatically
+
+ds %<>% clean_names(numerals = "right")
+
+# Save cleaned PVLT df
+saveRDS(ds, file = "objects/clinical_testing/pvlt_cleaned_cases_and_controls.RDS")
+
+pvlt_cases_with_ashs_and_ad_markers <-
+  mri_selected_ashs %>%
+  select(inddid = inddid, diagnosis, ad_present) %>%
+  left_join(ds) %>%
+  filter(diagnosis != "Normal") %>%
+  filter(!is.na(test_date_1)) %>% # These took the VLT
+  select(
+    inddid, diagnosis, ad_present,
+    test_date_1
+  )
+
+pvlt_cases_with_ashs_and_ad_markers_table <-
+  pvlt_cases_with_ashs_and_ad_markers %>%
+  select(inddid, diagnosis, ad_present) %>%
+  distinct() %>%
+  select(ad_present, diagnosis) %>%
+  mutate(diagnosis = as.factor(diagnosis)) %>%
+  summary()
+
+
+n_pvlt_cases_with_ashs_and_ad_markers <-
+  pvlt_cases_with_ashs_and_ad_markers$inddid %>% n_distinct()
